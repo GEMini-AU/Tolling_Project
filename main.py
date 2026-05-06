@@ -1,22 +1,16 @@
 import os
 import sys
 import traci
+import sqlite3  # 导入数据库模块
 
 # --- 设定动态路费的规则 ---
 def calculate_toll(current_vehicle_count):
-    """
-    根据区域内的车辆数量，动态计算拥堵费
-    """
-    base_fee = 1.0  # 基础费率：1元
-    
+    base_fee = 1.0  
     if current_vehicle_count < 10:
-        # 畅通状态
         return base_fee
     elif 10 <= current_vehicle_count <= 20:
-        # 轻度拥堵状态：基础费率 x 2.5
         return base_fee * 2.5
     else:
-        # 严重拥堵状态：基础费率 x 5.0
         return base_fee * 5.0
 
 # --- 基础环境配置 ---
@@ -28,24 +22,51 @@ else:
 
 sumoCmd = ["sumo", "-c", "sim.sumocfg"] 
 traci.start(sumoCmd)
-print("--- 🚀 仿真开始连接，动态定价引擎已启动 ---")
+
+# 连接到我们刚才建好的虚拟银行
+conn = sqlite3.connect('tolling_system.db')
+cursor = conn.cursor()
+
+print("---  仿真开始连接,动态定价与【ETC扣费系统】已启动 ---")
 
 # ---  开启循环 ---
 step = 0
 while step < 100:  
     traci.simulationStep() 
     
-    # 获取路网实时车辆数 (X变量)
+    # 查车数
     active_vehicles = traci.vehicle.getIDList()
     vehicle_count = len(active_vehicles)
     
-    # 【核心新增】将车辆数扔进我们的大脑，计算出当前应该收多少钱 (Y结果)
+    # 算价格
     current_toll_fee = calculate_toll(vehicle_count)
     
-    # 打印结果，看看算法是否生效
     print(f"第 {step} 秒 | 路网车辆数: {vehicle_count} 辆 | 实时动态过路费: ¥ {current_toll_fee}")
+    
+    # 开始逐辆车扫描扣款！
+    for veh_id in active_vehicles:
+        # 查一下这辆车有没有在银行里开过户
+        cursor.execute("SELECT balance FROM Wallet WHERE vehicle_id = ?", (veh_id,))
+        result = cursor.fetchone()
+        
+        if result is None:
+            # 如果没查到，说明是一辆刚上路的新车！
+            # 计算扣费后的余额 (送100块，减去当前过路费)
+            new_balance = 100.0 - current_toll_fee
+            
+            # 记录进数据库
+            cursor.execute("INSERT INTO Wallet (vehicle_id, balance) VALUES (?, ?)", (veh_id, new_balance))
+            
+            print(f"新车入网: {veh_id} | 扣费: ¥{current_toll_fee} | 钱包余额: ¥{new_balance}")
+        
+        # 如果 result 不是 None，说明是老车，已经在路上跑了，进场费已经交过，不需要重复扣。
+
+    # 盖章确认，把这1秒钟内所有的交易写死在硬盘上
+    conn.commit()
     
     step += 1
 
+# 
+conn.close()
 traci.close()
 print("--- 🛑 仿真结束 ---")
