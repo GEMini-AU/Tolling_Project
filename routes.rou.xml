@@ -7,6 +7,6 @@
     <!-- 导航方案B（备用）：走小路，慢但免费 -->
     <route id="route_bypass" edges="road_in road_detour1 road_detour2"/>
     
-    <!-- 疯狂发车：每秒钟都以50%的概率随机发一辆车，全部默认先走方案A -->
-    <flow id="flow1" type="car" route="route_main" begin="0" end="100" probability="0.5"/>
+    
+    <flow id="flow1" type="car" route="route_main" begin="0" end="400" probability="0.9"/>
 </routes>
