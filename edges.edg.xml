@@ -1,0 +1,4 @@
+<edges>
+    <!-- 从起点连向终点，设定限速 15m/s，双车道 -->
+    <edge id="road_1" from="node_start" to="node_end" speed="15.0" numLanes="2"/>
+</edges>
