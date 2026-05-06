@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<!-- generated on 2026-05-06T21:42:35.604714+09:00 by Eclipse SUMO netconvert 1.26.0
+<!-- generated on 2026-05-06T23:37:57.014948+09:00 by Eclipse SUMO netconvert 1.26.0
 <netconvertConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/netconvertConfiguration.xsd">
 
     <input>
@@ -17,14 +17,47 @@
 
 <net version="1.20" junctionCornerDetail="5" limitTurnSpeed="5.50" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/net_file.xsd">
 
-    <location netOffset="0.00,0.00" convBoundary="0.00,0.00,1000.00,0.00" origBoundary="0.00,0.00,1000.00,0.00" projParameter="!"/>
+    <location netOffset="0.00,0.00" convBoundary="0.00,0.00,1000.00,500.00" origBoundary="0.00,0.00,1000.00,500.00" projParameter="!"/>
 
-    <edge id="road_1" from="node_start" to="node_end" priority="-1">
-        <lane id="road_1_0" index="0" speed="15.00" length="1000.00" shape="0.00,-4.80 1000.00,-4.80"/>
-        <lane id="road_1_1" index="1" speed="15.00" length="1000.00" shape="0.00,-1.60 1000.00,-1.60"/>
+    <edge id=":detour_0" function="internal">
+        <lane id=":detour_0_0" index="0" speed="4.12" length="4.78" shape="501.60,492.27 501.77,493.79 502.28,494.49 503.14,494.36 504.33,493.41"/>
+    </edge>
+    <edge id=":split_0" function="internal">
+        <lane id=":split_0_0" index="0" speed="20.00" length="11.20" shape="496.00,-1.60 507.20,-1.60"/>
+    </edge>
+    <edge id=":split_1" function="internal">
+        <lane id=":split_1_0" index="0" speed="6.51" length="9.03" shape="496.00,-1.60 498.45,-1.25 500.20,-0.20 501.25,1.55 501.60,4.00"/>
     </edge>
 
-    <junction id="node_end" type="dead_end" x="1000.00" y="0.00" incLanes="road_1_0 road_1_1" intLanes="" shape="1000.00,-6.40 1000.00,0.00"/>
-    <junction id="node_start" type="dead_end" x="0.00" y="0.00" incLanes="" intLanes="" shape="0.00,0.00 0.00,-6.40"/>
+    <edge id="road_detour1" from="split" to="detour" priority="-1">
+        <lane id="road_detour1_0" index="0" speed="15.00" length="488.27" shape="501.60,4.00 501.60,492.27"/>
+    </edge>
+    <edge id="road_detour2" from="detour" to="end" priority="-1">
+        <lane id="road_detour2_0" index="0" speed="15.00" length="694.68" shape="504.33,493.41 995.55,2.19"/>
+    </edge>
+    <edge id="road_in" from="start" to="split" priority="-1">
+        <lane id="road_in_0" index="0" speed="20.00" length="496.00" shape="0.00,-1.60 496.00,-1.60"/>
+    </edge>
+    <edge id="road_toll" from="split" to="end" priority="-1">
+        <lane id="road_toll_0" index="0" speed="20.00" length="486.77" shape="507.20,-1.60 993.97,-1.60"/>
+    </edge>
+
+    <junction id="detour" type="priority" x="500.00" y="500.00" incLanes="road_detour1_0" intLanes=":detour_0_0" shape="505.46,494.54 503.20,492.27 500.00,492.27 500.15,494.48 500.61,495.96 501.37,496.70 502.43,496.71 503.79,495.99">
+        <request index="0" response="0" foes="0" cont="0"/>
+    </junction>
+    <junction id="end" type="dead_end" x="1000.00" y="0.00" incLanes="road_toll_0 road_detour2_0" intLanes="" shape="993.97,-3.20 993.97,0.00 994.69,0.12 994.83,0.27 994.84,0.47 994.70,0.74 994.41,1.06 996.68,3.32 998.41,1.33 999.28,-0.30 999.26,-1.57 998.37,-2.48 996.61,-3.02"/>
+    <junction id="split" type="priority" x="500.00" y="0.00" incLanes="road_in_0" intLanes=":split_0_0 :split_1_0" shape="500.00,4.00 503.20,4.00 503.64,1.78 504.20,1.00 504.98,0.44 505.98,0.11 507.20,0.00 507.20,-3.20 496.00,-3.20 496.00,0.00 498.22,0.44 499.00,1.00 499.56,1.78 499.89,2.78">
+        <request index="0" response="00" foes="00" cont="0"/>
+        <request index="1" response="00" foes="00" cont="0"/>
+    </junction>
+    <junction id="start" type="dead_end" x="0.00" y="0.00" incLanes="" intLanes="" shape="0.00,0.00 0.00,-3.20"/>
+
+    <connection from="road_detour1" to="road_detour2" fromLane="0" toLane="0" via=":detour_0_0" dir="r" state="M"/>
+    <connection from="road_in" to="road_toll" fromLane="0" toLane="0" via=":split_0_0" dir="s" state="M"/>
+    <connection from="road_in" to="road_detour1" fromLane="0" toLane="0" via=":split_1_0" dir="l" state="M"/>
+
+    <connection from=":detour_0" to="road_detour2" fromLane="0" toLane="0" dir="r" state="M"/>
+    <connection from=":split_0" to="road_toll" fromLane="0" toLane="0" dir="s" state="M"/>
+    <connection from=":split_1" to="road_detour1" fromLane="0" toLane="0" dir="l" state="M"/>
 
 </net>
