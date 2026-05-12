@@ -1,91 +1,119 @@
 import os
 import sys
 import traci
-import sqlite3   #导入数据库
-import random    #导入随机函数
+import sqlite3
+import csv
+import random
 
-# --- 设定动态路费的规则 ---
-def calculate_toll(current_vehicle_count):
-    base_fee = 1.0  
-    if current_vehicle_count < 10:   #车辆数量小于10的时候保持一块钱
-        return base_fee
-    elif 10 <= current_vehicle_count <= 20:   #车辆数量10-20的时候保持2.5
-        return base_fee * 2.5
-    else:                                  #大于20的时候收费5块
-        return base_fee * 5.0
-
-# --- 基础环境配置 ---
+# 1. 环境检查：确保能找到 SUMO 工具
 if 'SUMO_HOME' in os.environ:
     tools = os.path.join(os.environ['SUMO_HOME'], 'tools')
     sys.path.append(tools)
 else:
-    sys.exit("请配置 SUMO_HOME 环境变量")
+    sys.exit("请先配置 SUMO_HOME 环境变量")
 
-# 运行时自动打开sumo界面
-sumoCmd = ["sumo-gui", "-c", "sim.sumocfg"] 
-traci.start(sumoCmd)
-
-conn = sqlite3.connect('tolling_system.db')
-cursor = conn.cursor()
-
-cursor.execute("DROP TABLE IF EXISTS Wallet")  #每次运行删掉以前的表，保证每次仿真是零起点
-
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS Wallet (
-        vehicle_id TEXT PRIMARY KEY,
-        balance REAL
-    )
-''')
-
-print("---  动态定价、ETC扣费与自动绕行系统已全面启动 ---")
-
-
-step = 0
-while step < 400:  
-    traci.simulationStep() 
-    
-    # 获取全网所有车辆
-    active_vehicles = traci.vehicle.getIDList()
-    
-    # 站长只数“收费主路(road_toll)”上有多少辆车
-    cars_on_toll_road = traci.edge.getLastStepVehicleIDs("road_toll")
-    toll_road_count = len(cars_on_toll_road)
-    
-    # 算价格
-    current_toll_fee = calculate_toll(toll_road_count)
-    
-    print(f"第 {step} 秒 | 主路拥堵: {toll_road_count} 辆 | 过路费: ¥ {current_toll_fee}")
-    
-
-    
-    
-    # 逐辆车扫描
-    for veh_id in active_vehicles:
-        cursor.execute("SELECT balance FROM Wallet WHERE vehicle_id = ?", (veh_id,))
-        result = cursor.fetchone()
-        
-        if result is None:
-            # 新车入网，先扣费
-            new_balance = 100.0 - current_toll_fee
-            cursor.execute("INSERT INTO Wallet (vehicle_id, balance) VALUES (?, ?)", (veh_id, new_balance))
-            
-            # 
-            # 如果当前过路费已经涨到了 2.5 元（轻度拥堵）或更高
-            # 【终极优化：模拟真实人类的选择概率】
-            if current_toll_fee >= 2.5:
-                # 掷骰子：生成一个 0 到 1 之间的随机数。如果小于 0.7（即70%的概率）
-                if random.random() < 0.70:
-                    # 这 70% 的人嫌贵，强制绕路
-                    traci.vehicle.setRouteID(veh_id, "route_bypass")
-                    print(f"   -> 💳 新车 {veh_id} 扣款 ¥{current_toll_fee} | 嫌贵绕行！(价格敏感型)")
-                else:
-                    # 剩下 30% 的人是土豪或赶时间，硬着头皮走主路
-                    print(f"   -> 💳 新车 {veh_id} 扣款 ¥{current_toll_fee} | 哪怕涨价也要走主路！(土豪/赶时间)")
-            else:
-                print(f"   -> 💳 新车 {veh_id} 扣款 ¥{current_toll_fee} | 畅通无阻，继续走主路。")
-
+# 2. 数据库初始化 (满足 ACID 事务要求)
+def init_database():
+    conn = sqlite3.connect('weihai_tolling.db')
+    cursor = conn.cursor()
+    # 记录钱包余额
+    cursor.execute('CREATE TABLE IF NOT EXISTS Wallet (veh_id TEXT PRIMARY KEY, balance REAL)')
+    # 记录每一笔交易流水 (Transaction Log)
+    cursor.execute('CREATE TABLE IF NOT EXISTS Logs (id INTEGER PRIMARY KEY AUTOINCREMENT, veh_id TEXT, amount REAL, step INTEGER)')
     conn.commit()
-    step += 1
+    return conn
 
-conn.close()
-traci.close()
+# 3. 动态定价算法 (根据 CBD 拥堵数阶梯收费)
+def get_toll_fee(vehicle_count):
+    if vehicle_count < 30: return 1.0   # 畅通：1元
+    elif vehicle_count < 80: return 2.5 # 拥挤：2.5元
+    else: return 5.0                   # 极度拥堵：5元
+
+def run_simulation():
+    # --- 配置区：威高商圈电子围栏坐标 (Geofencing) ---
+    # 请在运行 sumo-gui 后，鼠标悬停在威高广场区域，读取左下和右上坐标填在这里
+    CBD_X_MIN, CBD_X_MAX = 4715.570, 4942.33
+    CBD_Y_MIN, CBD_Y_MAX = 1904.66, 2311.85
+
+    # 启动仿真 (关联威海地图和新生成的 4000 辆车)
+    sumo_cmd = ["sumo-gui", "-n", "weihai_cbd.net.xml", "-r", "routes.rou.xml", "--start"]
+    traci.start(sumo_cmd)
+    
+    conn = init_database()
+    cursor = conn.cursor()
+
+    # 开启 CSV 书记员：自动生成实验报表
+    log_file = open('weihai_analysis_report.csv', 'w', newline='', encoding='utf-8')
+    csv_writer = csv.writer(log_file)
+    csv_writer.writerow(['秒数', 'CBD内车辆数', '实时电费', '全城平均时速', '政府总收入', '累计绕行人数'])
+
+    step = 0
+    total_revenue = 0
+    total_detoured = 0
+
+    print("--- 威海市威高商圈动态计费系统：全线启动 ---")
+
+    while step < 10800:  # 模拟 10800 秒 (3小时早高峰)
+        traci.simulationStep()
+        
+        all_vehs = traci.vehicle.getIDList()
+        vehs_in_cbd = []
+        total_speed = 0
+
+        # --- 核心逻辑 A：GPS 空间定位判定 ---
+        for v_id in all_vehs:
+            x, y = traci.vehicle.getPosition(v_id)
+            speed = traci.vehicle.getSpeed(v_id)
+            total_speed += speed
+            
+            # 判断小车是否踏入威高广场“红框”
+            if CBD_X_MIN <= x <= CBD_X_MAX and CBD_Y_MIN <= y <= CBD_Y_MAX:
+                vehs_in_cbd.append(v_id)
+
+        cbd_count = len(vehs_in_cbd)
+        current_fee = get_toll_fee(cbd_count)
+        avg_speed = (total_speed / len(all_vehs)) if all_vehs else 0
+
+        # --- 核心逻辑 B：ACID 数据库事务扣费 ---
+        for v_id in vehs_in_cbd:
+            try:
+                # 开启事务 (Atomic)
+                conn.execute("BEGIN TRANSACTION")
+                
+                # 1. 检查或初始化钱包
+                cursor.execute("INSERT OR IGNORE INTO Wallet VALUES (?, 100.0)", (v_id,))
+                
+                # 2. 扣款
+                cursor.execute("UPDATE Wallet SET balance = balance - ? WHERE veh_id = ?", (current_fee, v_id))
+                
+                # 3. 记录流水日志 (Transaction Processing)
+                cursor.execute("INSERT INTO Logs (veh_id, amount, step) VALUES (?, ?, ?)", (v_id, current_fee, step))
+                
+                total_revenue += current_fee
+
+                # --- 核心逻辑 C：绕行博弈 (Diversion Analysis) ---
+                if current_fee >= 2.5 and random.random() < 0.7:
+                    # 强制车辆重新规划路径 (避开高价区)
+                    traci.vehicle.rerouteTraveltime(v_id)
+                    total_detoured += 1
+                
+                conn.commit() # 提交事务
+            except Exception as e:
+                conn.rollback() # 出错回滚，保证数据一致性
+                print(f"ACID 事务失败: {e}")
+
+        # 每 10 秒记录一次报表数据
+        if step % 10 == 0:
+            csv_writer.writerow([step, cbd_count, current_fee, avg_speed, total_revenue, total_detoured])
+            if step % 1000 == 0:
+                print(f"进度: {step}/10800s | CBD人数: {cbd_count} | 累计收入: ¥{total_revenue:.2f}")
+
+        step += 1
+
+    log_file.close()
+    conn.close()
+    traci.close()
+    print("--- 实验结束！请查看 weihai_analysis_report.csv 获取分析数据 ---")
+
+if __name__ == "__main__":
+    run_simulation()
