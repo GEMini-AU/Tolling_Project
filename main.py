@@ -39,9 +39,9 @@ cursor.execute('''
 
 print("---  动态定价、ETC扣费与自动绕行系统已全面启动 ---")
 
-# 把这行修改一下，让子弹飞一会儿：
+
 step = 0
-while step < 400:  # 【关键修改】把 100 秒改成 400 秒！
+while step < 400:  
     traci.simulationStep() 
     
     # 获取全网所有车辆
