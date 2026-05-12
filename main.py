@@ -52,7 +52,16 @@ def run_simulation():
     total_detoured = 0
 
     print("--- 威海市威高商圈动态计费系统：全线启动 ---")
-
+    try:
+        traci.polygon.add(
+            polygonID="CBD_ZONE", 
+            shape=[(CBD_X_MIN, CBD_Y_MIN), (CBD_X_MAX, CBD_Y_MIN), (CBD_X_MAX, CBD_Y_MAX), (CBD_X_MIN, CBD_Y_MAX)], 
+            color=(255, 0, 0, 150), # 红色，半透明
+            fill=False, 
+            lineWidth=8 # 边框加粗
+        )
+    except:
+        pass # 如果报错就不管它
     while step < 10800:  # 模拟 10800 秒 (3小时早高峰)
         traci.simulationStep()
         
@@ -96,6 +105,11 @@ def run_simulation():
                     # 强制车辆重新规划路径 (避开高价区)
                     traci.vehicle.rerouteTraveltime(v_id)
                     total_detoured += 1
+                    # 【特效】只要绕行，车身立刻变成极其显眼的蓝色！
+                    traci.vehicle.setColor(v_id, (0, 100, 255))
+                else:
+                    # 【特效 3】进入CBD但没绕行，变成红色土豪车
+                    traci.vehicle.setColor(v_id, (255, 0, 0))
                 
                 conn.commit() # 提交事务
             except Exception as e:
@@ -117,3 +131,5 @@ def run_simulation():
 
 if __name__ == "__main__":
     run_simulation()
+
+    
