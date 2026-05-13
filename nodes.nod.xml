@@ -1,7 +1,0 @@
-<nodes>
-    <node id="start" x="0" y="0"/>
-    <node id="split" x="500" y="0"/>
-    <node id="end" x="1000" y="0"/>
-    <!-- 下面这个是新增的绕路顶点，y坐标是500，把它往上拉高了 -->
-    <node id="detour" x="500" y="500"/>
-</nodes>
