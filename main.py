@@ -5,143 +5,156 @@ import sqlite3
 import csv
 import random
 
-# 1. 环境检查：确保能找到 SUMO 工具
+# ==========================================
+# 1. 仿真全局配置参数 (Simulation Parameters)
+# ==========================================
+SIM_STEPS = 10800              # 仿真总时长 (3小时 = 10800 秒)
+DETOUR_PROBABILITY = 0.7       # 绕行概率阈值 (70% 的车辆会因为拥堵费绕路)
+TOLL_THRESHOLD_HIGH = 2.5      # 触发绕行博弈的拥堵费阈值 (元)
+INITIAL_BALANCE = 100.0        # 账户初始余额 (元)
+
+# CBD 核心区地理围栏坐标 (请确保与你在 netedit 中测量的完全一致)
+CBD_X_MIN, CBD_X_MAX = 99.26, 701.14
+CBD_Y_MIN, CBD_Y_MAX = -510.77, 312.23
+
+# ==========================================
+# 2. 环境与工具初始化
+# ==========================================
 if 'SUMO_HOME' in os.environ:
     tools = os.path.join(os.environ['SUMO_HOME'], 'tools')
     sys.path.append(tools)
 else:
-    sys.exit("请先配置 SUMO_HOME 环境变量")
+    sys.exit("环境变量中未声明 'SUMO_HOME'，请配置后重试。")
 
-# 2. 数据库初始化 (满足 ACID 事务要求)
-def init_database():
-    conn = sqlite3.connect('weihai_tolling.db')
-    cursor = conn.cursor()
-    # 记录钱包余额
-    cursor.execute('CREATE TABLE IF NOT EXISTS Wallet (veh_id TEXT PRIMARY KEY, balance REAL)')
-    # 记录每一笔交易流水 (Transaction Log)
-    cursor.execute('CREATE TABLE IF NOT EXISTS Logs (id INTEGER PRIMARY KEY AUTOINCREMENT, veh_id TEXT, amount REAL, step INTEGER)')
-    conn.commit()
-    return conn
+# 启动命令配置 (包含路网、路由、绿地附加文件)
+# 注意：如果 my_view.xml 报错，可将 "--gui-settings-file" 这一行注释掉
+sumo_cmd = [
+    "sumo-gui",
+    "-n", "weihai_cbd.net.xml",
+    "-r", "routes.rou.xml",
+    "-a", "parks.add.xml",
+    # "--gui-settings-file", "my_view.xml",
+    "--start"
+]
 
-# 3. 动态定价算法 (根据 CBD 拥堵数阶梯收费)
 def get_toll_fee(vehicle_count):
-    if vehicle_count < 30: return 1.0   # 畅通：1元
-    elif vehicle_count < 80: return 2.5 # 拥挤：2.5元
-    else: return 5.0                   # 极度拥堵：5元
+    """
+    动态定价机制 (Dynamic Pricing Mechanism)
+    根据 CBD 区域内实时车辆密度，动态调整拥堵费费率。
+    """
+    if vehicle_count < 20:
+        return 1.0  # 畅通状态，基础费率
+    elif vehicle_count < 50:
+        return 2.5  # 轻度拥堵，提高费率
+    else:
+        return 5.0  # 严重拥堵，惩罚性费率
 
 def run_simulation():
-    # --- 配置区：威高商圈电子围栏坐标 (Geofencing) ---
-    # 请在运行 sumo-gui 后，鼠标悬停在威高广场区域，读取左下和右上坐标填在这里
-    CBD_X_MIN, CBD_X_MAX = 97.71, 700.81
-    CBD_Y_MIN, CBD_Y_MAX = -510.29, 310.81
-
-    # 启动仿真 (关联威海地图和新生成的 4000 辆车)
-    sumo_cmd = ["sumo-gui", "-n", "weihai_cbd.net.xml", "-r", "routes.rou.xml","-a", "parks.add.xml", "--start"]
+    """核心仿真主函数"""
     traci.start(sumo_cmd)
     
-    conn = init_database()
+    # --- 数据库持久化配置 (Database Initialization) ---
+    conn = sqlite3.connect("weihai_toll_system.db")
     cursor = conn.cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS Wallet (veh_id TEXT PRIMARY KEY, balance REAL)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS Logs (id INTEGER PRIMARY KEY AUTOINCREMENT, veh_id TEXT, amount REAL, step INTEGER)")
+    conn.commit()
 
-    # 开启 CSV 书记员：自动生成实验报表
-    log_file = open('weihai_analysis_report.csv', 'w', newline='', encoding='utf-8')
-    csv_writer = csv.writer(log_file)
-    csv_writer.writerow(['秒数', 'CBD内车辆数', '实时电费', '全城平均时速', '政府总收入', '累计绕行人数'])
+    # --- 数据报表输出配置 (Data Logging) ---
+    csv_file = open("weihai_analysis_report.csv", "w", newline="", encoding="utf-8")
+    csv_writer = csv.writer(csv_file)
+    # 写入规范的英文字段表头，满足“数据报告”的考核要求
+    csv_writer.writerow(["Time_Step", "Vehicles_in_CBD", "Current_Toll_Fee", "Average_Speed_mps", "Total_Revenue", "Detoured_Vehicles"])
 
+    # 仿真状态变量
     step = 0
-    total_revenue = 0
+    total_revenue = 0.0
     total_detoured = 0
+    processed_vehs = set()  # 已处理车辆集合，防止重复扣费
 
-    print("--- 威海市威高商圈动态计费系统：全线启动 ---")
+    # 【视觉特效】绘制 CBD 电子围栏
     try:
         traci.polygon.add(
-            polygonID="CBD_ZONE", 
-            # 👇 重点在这里：我们加了第5个点，让它连回起点，彻底闭合框框！
-            shape=[
-                (CBD_X_MIN, CBD_Y_MIN), # 1. 起点：左下角
-                (CBD_X_MAX, CBD_Y_MIN), # 2. 连线到：右下角
-                (CBD_X_MAX, CBD_Y_MAX), # 3. 连线到：右上角
-                (CBD_X_MIN, CBD_Y_MAX), # 4. 连线到：左上角
-                (CBD_X_MIN, CBD_Y_MIN)  # 5. 终点：连回左下角（补齐左边界！）
-            ], 
-            color=(255, 0, 0, 150), 
-            fill=False, 
-            lineWidth=8 
-        )
-    except:
-        pass
-    # 👇 终极修复：增加一个“已收费名单”，防止重复处理
-    processed_vehs = set() 
-
-    # 【视觉特效】在你的新地图上画出红色的收费结界
-    try:
-        traci.polygon.add(
-            polygonID="CBD_ZONE", 
-            shape=[(CBD_X_MIN, CBD_Y_MIN), (CBD_X_MAX, CBD_Y_MIN), (CBD_X_MAX, CBD_Y_MAX), (CBD_X_MIN, CBD_Y_MAX), (CBD_X_MIN, CBD_Y_MIN)], 
-            color=(255, 0, 0, 150), 
-            fill=False, 
-            lineWidth=8 
+            polygonID="CBD_ZONE",
+            shape=[(CBD_X_MIN, CBD_Y_MIN), (CBD_X_MAX, CBD_Y_MIN), (CBD_X_MAX, CBD_Y_MAX), (CBD_X_MIN, CBD_Y_MAX), (CBD_X_MIN, CBD_Y_MIN)],
+            color=(255, 0, 0, 150), fill=False, lineWidth=8
         )
     except:
         pass 
 
-    while step < 10800:  
-        traci.simulationStep()
-        
-        all_vehs = traci.vehicle.getIDList()
-        vehs_in_cbd = []
-        total_speed = 0
+    print("--- 仿真系统启动，开始执行动态收费博弈模型 ---")
 
-        # 判断小车是否踏入收费区
-        for v_id in all_vehs:
-            x, y = traci.vehicle.getPosition(v_id)
-            speed = traci.vehicle.getSpeed(v_id)
-            total_speed += speed
+    try:
+        # 主仿真循环
+        while step < SIM_STEPS:
+            traci.simulationStep()
             
-            if CBD_X_MIN <= x <= CBD_X_MAX and CBD_Y_MIN <= y <= CBD_Y_MAX:
-                vehs_in_cbd.append(v_id)
+            all_vehs = traci.vehicle.getIDList()
+            vehs_in_cbd = []
+            total_speed = 0.0
 
-        cbd_count = len(vehs_in_cbd)
-        current_fee = get_toll_fee(cbd_count)
-        avg_speed = (total_speed / len(all_vehs)) if all_vehs else 0
+            # 检测车辆位置状态
+            for v_id in all_vehs:
+                x, y = traci.vehicle.getPosition(v_id)
+                speed = traci.vehicle.getSpeed(v_id)
+                total_speed += speed
+                
+                # 触发地理围栏判定
+                if CBD_X_MIN <= x <= CBD_X_MAX and CBD_Y_MIN <= y <= CBD_Y_MAX:
+                    vehs_in_cbd.append(v_id)
 
-        # --- 数据库扣款与绕行博弈 (只执行一次) ---
-        for v_id in vehs_in_cbd:
-            # 👇 核心逻辑：如果这辆车没被处理过，才进去处理
-            if v_id not in processed_vehs:
-                processed_vehs.add(v_id) # 盖个章：已收费！
+            # 计算当前时刻的宏观交通指标
+            cbd_count = len(vehs_in_cbd)
+            current_fee = get_toll_fee(cbd_count)
+            avg_speed = (total_speed / len(all_vehs)) if all_vehs else 0.0
 
-                try:
-                    conn.execute("BEGIN TRANSACTION")
-                    cursor.execute("INSERT OR IGNORE INTO Wallet VALUES (?, 100.0)", (v_id,))
-                    cursor.execute("UPDATE Wallet SET balance = balance - ? WHERE veh_id = ?", (current_fee, v_id))
-                    cursor.execute("INSERT INTO Logs (veh_id, amount, step) VALUES (?, ?, ?)", (v_id, current_fee, step))
-                    total_revenue += current_fee
+            # --- 核心业务逻辑：金融事务处理与微观绕行博弈 ---
+            for v_id in vehs_in_cbd:
+                if v_id not in processed_vehs:
+                    processed_vehs.add(v_id) 
 
-                    # 绕行判定：一经决定，永不更改
-                    if current_fee >= 2.5 and random.random() < 0.7:
-                        traci.vehicle.rerouteTraveltime(v_id) # 重新规划路线
-                        total_detoured += 1
-                        traci.vehicle.setColor(v_id, (0, 100, 255)) # 变成蓝色绕行车
-                    else:
-                        traci.vehicle.setColor(v_id, (255, 0, 0)) # 变成红色土豪车
-                    
-                    conn.commit() 
-                except Exception as e:
-                    conn.rollback() 
-                    print(f"事务失败: {e}")
+                    try:
+                        # 开启数据库事务，保证数据强一致性
+                        conn.execute("BEGIN TRANSACTION")
+                        
+                        cursor.execute("INSERT OR IGNORE INTO Wallet VALUES (?, ?)", (v_id, INITIAL_BALANCE))
+                        cursor.execute("UPDATE Wallet SET balance = balance - ? WHERE veh_id = ?", (current_fee, v_id))
+                        cursor.execute("INSERT INTO Logs (veh_id, amount, step) VALUES (?, ?, ?)", (v_id, current_fee, step))
+                        
+                        total_revenue += current_fee
 
-        # 每 10 秒记录一次数据
-        if step % 10 == 0:
-            csv_writer.writerow([step, cbd_count, current_fee, avg_speed, total_revenue, total_detoured])
-            if step % 1000 == 0:
-                print(f"进度: {step}/10800s | CBD人数: {cbd_count} | 累计收入: ¥{total_revenue:.2f}")
+                        # 微观驾驶员行为决策模型 (Microscopic Driver Behavior)
+                        if current_fee >= TOLL_THRESHOLD_HIGH and random.random() < DETOUR_PROBABILITY:
+                            traci.vehicle.rerouteTraveltime(v_id) # 触发重新路由
+                            total_detoured += 1
+                            traci.vehicle.setColor(v_id, (0, 100, 255)) # 蓝色: 绕行车
+                        else:
+                            traci.vehicle.setColor(v_id, (255, 0, 0)) # 红色: 付费车
+                        
+                        conn.commit() # 提交事务
+                    except Exception as e:
+                        conn.rollback() # 异常回滚
+                        print(f"[{step}s] 车辆 {v_id} 交易事务失败: {e}")
 
-        step += 1
+            # 数据采样与持久化 (每 10 秒记录一次)
+            if step % 10 == 0:
+                csv_writer.writerow([step, cbd_count, current_fee, avg_speed, total_revenue, total_detoured])
+                
+                # 终端输出
+                if step % 1000 == 0:
+                    print(f"进度: {step}/{SIM_STEPS}s | CBD拥堵度: {cbd_count}辆 | 动态费率: ¥{current_fee} | 累计财政收入: ¥{total_revenue:.2f}")
 
-    log_file.close()
-    conn.close()
-    traci.close()
-    print("--- 实验结束！请查看 weihai_analysis_report.csv 获取分析数据 ---")
+            step += 1
+
+    except Exception as e:
+        print(f"\n[致命错误] 仿真运行中发生异常: {e}")
+    finally:
+        # 防御性编程：无论程序如何终止，绝对保证资源安全释放
+        print("\n--- 仿真结束，正在执行资源清理与数据落盘 ---")
+        csv_file.close()
+        conn.close()
+        traci.close()
+        print("--- 清理完成！请查看 weihai_analysis_report.csv 获取评估指标 ---")
 
 if __name__ == "__main__":
     run_simulation()
