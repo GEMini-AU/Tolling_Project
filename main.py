@@ -6,19 +6,19 @@ import csv
 import random
 
 # ==========================================
-# 1. 仿真全局配置参数 (Simulation Parameters)
+#               仿真全局配置参数 
 # ==========================================
 SIM_STEPS = 10800              # 仿真总时长 (3小时 = 10800 秒)
 DETOUR_PROBABILITY = 0.7       # 绕行概率阈值 (70% 的车辆会因为拥堵费绕路)
 TOLL_THRESHOLD_HIGH = 2.5      # 触发绕行博弈的拥堵费阈值 (元)
 INITIAL_BALANCE = 100.0        # 账户初始余额 (元)
 
-# CBD 核心区地理围栏坐标 (请确保与你在 netedit 中测量的完全一致)
+# CBD 核心区地理围栏坐标
 CBD_X_MIN, CBD_X_MAX = 99.26, 701.14
 CBD_Y_MIN, CBD_Y_MAX = -510.77, 312.23
 
 # ==========================================
-# 2. 环境与工具初始化
+#               环境与工具初始化
 # ==========================================
 if 'SUMO_HOME' in os.environ:
     tools = os.path.join(os.environ['SUMO_HOME'], 'tools')
@@ -27,19 +27,18 @@ else:
     sys.exit("环境变量中未声明 'SUMO_HOME'，请配置后重试。")
 
 # 启动命令配置 (包含路网、路由、绿地附加文件)
-# 注意：如果 my_view.xml 报错，可将 "--gui-settings-file" 这一行注释掉
+
 sumo_cmd = [
     "sumo-gui",
     "-n", "weihai_cbd.net.xml",
     "-r", "routes.rou.xml",
     "-a", "parks.add.xml",
-    # "--gui-settings-file", "my_view.xml",
     "--start"
 ]
 
 def get_toll_fee(vehicle_count):
     """
-    动态定价机制 (Dynamic Pricing Mechanism)
+    动态定价机制
     根据 CBD 区域内实时车辆密度，动态调整拥堵费费率。
     """
     if vehicle_count < 20:
@@ -53,17 +52,17 @@ def run_simulation():
     """核心仿真主函数"""
     traci.start(sumo_cmd)
     
-    # --- 数据库持久化配置 (Database Initialization) ---
+    # --- 数据库持久化配置  ---
     conn = sqlite3.connect("weihai_toll_system.db")
     cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS Wallet (veh_id TEXT PRIMARY KEY, balance REAL)")
     cursor.execute("CREATE TABLE IF NOT EXISTS Logs (id INTEGER PRIMARY KEY AUTOINCREMENT, veh_id TEXT, amount REAL, step INTEGER)")
     conn.commit()
 
-    # --- 数据报表输出配置 (Data Logging) ---
+    # --- 数据报表输出配置  ---
     csv_file = open("weihai_analysis_report.csv", "w", newline="", encoding="utf-8")
     csv_writer = csv.writer(csv_file)
-    # 写入规范的英文字段表头，满足“数据报告”的考核要求
+    
     csv_writer.writerow(["Time_Step", "Vehicles_in_CBD", "Current_Toll_Fee", "Average_Speed_mps", "Total_Revenue", "Detoured_Vehicles"])
 
     # 仿真状态变量
@@ -72,7 +71,7 @@ def run_simulation():
     total_detoured = 0
     processed_vehs = set()  # 已处理车辆集合，防止重复扣费
 
-    # 【视觉特效】绘制 CBD 电子围栏
+    # 绘制 CBD 电子围栏
     try:
         traci.polygon.add(
             polygonID="CBD_ZONE",
@@ -82,7 +81,7 @@ def run_simulation():
     except:
         pass 
 
-    print("--- 仿真系统启动，开始执行动态收费博弈模型 ---")
+    print("--- 仿真系统启动，开始执行动态收费模型 ---")
 
     try:
         # 主仿真循环
@@ -103,12 +102,12 @@ def run_simulation():
                 if CBD_X_MIN <= x <= CBD_X_MAX and CBD_Y_MIN <= y <= CBD_Y_MAX:
                     vehs_in_cbd.append(v_id)
 
-            # 计算当前时刻的宏观交通指标
+            # 计算当前时刻的交通指标
             cbd_count = len(vehs_in_cbd)
             current_fee = get_toll_fee(cbd_count)
             avg_speed = (total_speed / len(all_vehs)) if all_vehs else 0.0
 
-            # --- 核心业务逻辑：金融事务处理与微观绕行博弈 ---
+            # --- 核心业务逻辑：金融事务处理与绕行博弈 ---
             for v_id in vehs_in_cbd:
                 if v_id not in processed_vehs:
                     processed_vehs.add(v_id) 
@@ -123,7 +122,7 @@ def run_simulation():
                         
                         total_revenue += current_fee
 
-                        # 微观驾驶员行为决策模型 (Microscopic Driver Behavior)
+                        # 驾驶员行为决策模型 
                         if current_fee >= TOLL_THRESHOLD_HIGH and random.random() < DETOUR_PROBABILITY:
                             traci.vehicle.rerouteTraveltime(v_id) # 触发重新路由
                             total_detoured += 1
