@@ -36,7 +36,7 @@ def run_simulation():
     CBD_Y_MIN, CBD_Y_MAX = -510.29, 310.81
 
     # 启动仿真 (关联威海地图和新生成的 4000 辆车)
-    sumo_cmd = ["sumo-gui", "-n", "weihai_cbd.net.xml", "-r", "routes.rou.xml", "--start"]
+    sumo_cmd = ["sumo-gui", "-n", "weihai_cbd.net.xml", "-r", "routes.rou.xml","-a", "parks.add.xml", "--start"]
     traci.start(sumo_cmd)
     
     conn = init_database()
