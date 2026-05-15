@@ -5,43 +5,65 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# 设置中文字体（根据你的系统可能需要微调，Windows默认黑体）
-plt.rcParams['font.sans-serif'] = ['SimHei'] 
-plt.rcParams['axes.unicode_minus'] = False
+def draw_comprehensive_charts():
+    # 设置图表样式与中文字体 
+    plt.style.use('seaborn-v0_8-whitegrid')
+    plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS'] 
+    plt.rcParams['axes.unicode_minus'] = False
 
-print("正在生成 A/B 测试对比图表...")
+    try:
+        print("正在读取仿真报告...")
+        df_base = pd.read_csv("baseline_report.csv")
+        df_toll = pd.read_csv("weihai_analysis_report.csv")
 
-try:
-    df_base = pd.read_csv("baseline_report.csv")
-    df_toll = pd.read_csv("weihai_analysis_report.csv")
+        # 创建 3 行 1 列的大型三联图表，共享 X 轴 (时间)
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 14), sharex=True)
 
-    plt.figure(figsize=(14, 10))
+        # ==========================================
+        # 平均车速对比 (Average Speed)
+        # ==========================================
+        ax1.plot(df_base['Time_Step'], df_base['Average_Speed_mps'] * 3.6, label='无收费基线模式', color='gray', linestyle='--')
+        ax1.plot(df_toll['Time_Step'], df_toll['Average_Speed_mps'] * 3.6, label='动态收费干预模式', color='royalblue', linewidth=2)
+        ax1.set_ylabel('CBD 平均车速 (km/h)', fontsize=12)
+        ax1.set_title('图 1: 威海 CBD 拥堵早高峰车速恢复对比', fontsize=14, fontweight='bold')
+        ax1.legend(loc='lower right')
 
-    # --- 图 1：全城平均车速对比 ---
-    plt.subplot(2, 1, 1)
-    plt.plot(df_base['Time_Step'], df_base['Average_Speed_mps'] * 3.6, label='基线组 (不收费)', color='#e74c3c', linewidth=2, linestyle='--')
-    plt.plot(df_toll['Time_Step'], df_toll['Average_Speed_mps'] * 3.6, label='实验组 (动态收费)', color='#2ecc71', linewidth=2)
-    plt.title('全城平均车速对比 (km/h)', fontsize=16)
-    plt.xlabel('仿真时间 (秒)', fontsize=12)
-    plt.ylabel('平均车速 (km/h)', fontsize=12)
-    plt.legend(fontsize=12)
-    plt.grid(True, alpha=0.3)
+        # ==========================================
+        # 车辆密度分流对比 (Traffic Density)
+        # ==========================================
+        ax2.plot(df_base['Time_Step'], df_base['Vehicles_in_CBD'], label='无收费基线车辆数', color='gray', linestyle='--')
+        ax2.plot(df_toll['Time_Step'], df_toll['Vehicles_in_CBD'], label='动态收费驻留车辆数', color='crimson', linewidth=2)
+        ax2.axhline(y=50, color='orange', linestyle=':', label='Logistic 拥堵预警拐点')
+        ax2.set_ylabel('区域驻留车辆数', fontsize=12)
+        ax2.set_title('图 2: 动态定价驱离分流效果评估', fontsize=14, fontweight='bold')
+        ax2.legend(loc='upper right')
 
-    # --- 图 2：CBD 核心区拥堵程度对比 ---
-    plt.subplot(2, 1, 2)
-    plt.plot(df_base['Time_Step'], df_base['Vehicles_in_CBD'], label='基线组 (不收费)', color='#e74c3c', linewidth=2, linestyle='--')
-    plt.plot(df_toll['Time_Step'], df_toll['Vehicles_in_CBD'], label='实验组 (动态收费)', color='#3498db', linewidth=2)
-    plt.title('CBD 核心区车辆密度对比 (拥堵程度)', fontsize=16)
-    plt.xlabel('仿真时间 (秒)', fontsize=12)
-    plt.ylabel('区域内车辆数 (辆)', fontsize=12)
-    plt.axhline(y=40, color='orange', linestyle=':', label='Logistic 拥堵预警拐点 (40辆)')
-    plt.legend(fontsize=12)
-    plt.grid(True, alpha=0.3)
+        # ==========================================
+        # 收入 vs 车速 
+        # ==========================================
+        color_rev = 'darkgreen'
+        ax3.plot(df_toll['Time_Step'], df_toll['Total_Revenue'], label='累计拥堵费收入 (¥)', color=color_rev, linewidth=2.5)
+        ax3.set_xlabel('仿真时间 (秒)', fontsize=12)
+        ax3.set_ylabel('财政总收入 (¥)', color=color_rev, fontsize=12)
+        ax3.tick_params(axis='y', labelcolor=color_rev)
+        
+        # 创建共用 X 轴的副 Y 轴，用于同框展示车速
+        ax3_twin = ax3.twinx()
+        color_speed = 'royalblue'
+        ax3_twin.plot(df_toll['Time_Step'], df_toll['Average_Speed_mps'] * 3.6, label='实时车速', color=color_speed, alpha=0.6, linestyle='-.')
+        ax3_twin.set_ylabel('实时车速 (km/h)', color=color_speed, fontsize=12)
+        ax3_twin.tick_params(axis='y', labelcolor=color_speed)
+        
+        ax3.set_title('每小时收益增长与车速恢复关联视图', fontsize=14, fontweight='bold')
 
-    plt.tight_layout()
-    plt.savefig('baseline_vs_tolling_comparison.png', dpi=300)
-    print("生成成功！请查看当前目录下的 baseline_vs_tolling_comparison.png")
-    plt.show()
+        # 调整布局并保存
+        fig.tight_layout()
+        output_file = "weihai_toll_evaluation_charts.png"
+        plt.savefig(output_file, dpi=300)
+        print(f"三维高阶评价图表生成成功，已保存至: {output_file}")
 
-except FileNotFoundError:
-    print("找不到 CSV 文件，请确保 baseline_report.csv 和 weihai_analysis_report.csv 存在。")
+    except Exception as e:
+        print(f"绘图失败: {e}")
+
+if __name__ == "__main__":
+    draw_comprehensive_charts()

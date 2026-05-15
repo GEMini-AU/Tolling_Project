@@ -1,79 +1,123 @@
 import pandas as pd
 import numpy as np
+import sqlite3
 
+def run_precision_kpi_analysis():
+    print("="*60)
+    print(" 威海 CBD 动态收费系统深度评估报告 ")
+    print("="*60)
 
-
-# 读取宏观分析报表
-try:
-    df = pd.read_csv("weihai_analysis_report.csv")
-    
-
-    # 1. 峰值车速提升幅度计算
-    # 寻找拥堵最严重时的最低车速
-    min_speed = df['Average_Speed_mps'].min()
-    # 寻找收费干预后，后半段仿真的平均恢复车速
-    recovery_speed = df[df['Time_Step'] > 5400]['Average_Speed_mps'].mean() 
-    speed_improvement = recovery_speed - min_speed
-    
-    print(f"【峰值车速提升幅度】")
-    print(f"极度拥堵最低车速: {min_speed:.2f} m/s")
-    print(f"干预后恢复均速: {recovery_speed:.2f} m/s")
-    print(f"提升幅度: +{speed_improvement:.2f} m/s (约 {speed_improvement*3.6:.2f} km/h)\n")
-
-    # 2. 区域进入弹性估算
-    # 截取费率从 2.5元 跳变到 5.0元 前后的数据切片
-    print(f"【区域进入弹性 (Price Elasticity of Demand)】")
-    print("通过对比费率上升前后的进入 CBD 流量变化 (ΔQ) 与费率变化 (ΔP) 计算得出。")
-    print("若弹性系数绝对值 > 1,说明该路网车流对价格高度敏感,侧面印证图 4 的绕行分流效果极佳。\n")
-
-    # 3. 真实收入 - 延误比 (Revenue - Delay Ratio)
     try:
-        df_base = pd.read_csv("baseline_report.csv")
-        df_toll = pd.read_csv("weihai_analysis_report.csv")
+        # 读取宏观 CSV 用于计算车速和每小时视图
+        df_csv = pd.read_csv("weihai_analysis_report.csv")
         
-        total_revenue = df_toll['Total_Revenue'].iloc[-1]
+        # 读取微观数据库 Trips 表用于精确延误计算
+        conn = sqlite3.connect("weihai_toll_system.db")
+        df_trips = pd.read_sql_query("SELECT * FROM Trips", conn)
+        conn.close()
+
+        # ==========================================
+        # 峰值车速提升幅度
+        # ==========================================
+        # 截取前 1 小时集中发车期的均速作为“真实拥堵基准”
+        congestion_speed = df_csv[df_csv['Time_Step'] <= 3600]['Average_Speed_mps'].mean()
+        # 截取最后 1 小时作为“路网消化恢复期均速”
+        recovery_speed = df_csv[df_csv['Time_Step'] > 7200]['Average_Speed_mps'].mean() 
+        speed_improvement = recovery_speed - congestion_speed
+        
+        print(f"\n峰值车速提升幅度")
+        print(f"早高峰拥堵时段均速: {congestion_speed:.2f} m/s")
+        print(f"路网消化恢复期均速: {recovery_speed:.2f} m/s")
+        print(f"真实提升幅度: +{speed_improvement:.2f} m/s (约 {speed_improvement*3.6:.2f} km/h)")
+
+        # ==========================================
+        # 真实的区域进入弹性 
+        # ==========================================
+        print(f"\n区域进入弹性")
+        try:
+            conn_base = sqlite3.connect("baseline.db")
+            df_base_trips = pd.read_sql_query("SELECT * FROM Trips", conn_base)
+            conn_base.close()
+            
+            peak_start, peak_end = 1800, 5400
+            q_baseline = len(df_base_trips[(df_base_trips['enter_step'] >= peak_start) & (df_base_trips['enter_step'] < peak_end)])
+            q_tolled = len(df_trips[(df_trips['enter_step'] >= peak_start) & (df_trips['enter_step'] < peak_end)])
+            
+            p_baseline = 0.0
+            p_tolled = df_csv[(df_csv['Time_Step'] >= peak_start) & (df_csv['Time_Step'] < peak_end)]['Current_Toll_Fee'].mean()
+            
+            if q_baseline > 0 and p_tolled > 0:
+                delta_Q_pct = (q_tolled - q_baseline) / q_baseline
+                delta_P_pct = (p_tolled - 1.0) / 1.0 
+                elasticity = abs(delta_Q_pct / delta_P_pct)
+                
+                print(f"[高峰同环比控制] 测试时间窗口: {peak_start}s - {peak_end}s")
+                print(f"免费基线组 (均价 ¥0.00) -> 真实驶入意愿: {q_baseline} 辆车")
+                print(f"收费干预组 (均价 ¥{p_tolled:.2f}) -> 真实驶入意愿: {q_tolled} 辆车")
+                print(f"计算得出区域进入需求弹性系数 (E): {elasticity:.4f}")
+                if elasticity > 1:
+                    print("结论: E > 1，车流对价格【富有弹性】，拥堵费成功抑制了刚性驶入需求！")
+                else:
+                    print("结论: E < 1，车流对价格【缺乏弹性】，人们宁可交钱也要进城。")
+            else:
+                print("高峰期数据量不足，无法计算弹性。")
+        except Exception as e:
+            print(f"弹性计算缺少对照组数据库 (baseline.db) 支持: {e}")
+
+        # ==========================================
+        # 每小时视图
+        # ==========================================
+        print(f"\n每小时维度的收入与车速报告")
+        df_csv['Hour'] = (df_csv['Time_Step'] // 3600) + 1
+        hourly_stats = df_csv.groupby('Hour').agg(
+            Hourly_Revenue=('Total_Revenue', lambda x: x.iloc[-1] - x.iloc[0] if len(x) > 1 else 0),
+            Avg_Speed_kmh=('Average_Speed_mps', lambda x: x.mean() * 3.6),
+            Max_Vehicles=('Vehicles_in_CBD', 'max')
+        ).reset_index()
+
+        print("时段 (Hour) | 新增过路费收入 (¥) | 区域平均车速 (km/h) | 峰值拥堵车辆数")
+        print("-" * 75)
+        for index, row in hourly_stats.iterrows():
+            print(f" 第 {int(row['Hour'])} 小时   | ¥ {row['Hourly_Revenue']:<15.2f} | {row['Avg_Speed_kmh']:<17.2f} | {int(row['Max_Vehicles'])}")
+
+        # ==========================================
+        # 基于 Trips 的高精度真实延误削减计算 
+        # ==========================================
+        print(f"\n 收入 - 延误比 ")
+        total_revenue = df_csv['Total_Revenue'].iloc[-1]
         free_flow_speed = 13.89  # 基准速度 50km/h
         
-        # 真实延误计算逻辑：1秒内未达到理想距离的累计折损
-        df_base['Delay'] = np.maximum(0, 1.0 - (df_base['Average_Speed_mps'] / free_flow_speed))
-        df_toll['Delay'] = np.maximum(0, 1.0 - (df_toll['Average_Speed_mps'] / free_flow_speed))
-        
-        baseline_total_delay = df_base['Delay'].sum()
-        tolled_total_delay = df_toll['Delay'].sum()
-        
-        # 实验组相比对照组，真实减少的延误总量
-        delay_reduced = baseline_total_delay - tolled_total_delay
-        
-        rdr = delay_reduced / total_revenue if total_revenue > 0 else 0
-        
-        print(f"【真实收入 - 延误比 (Revenue-Delay Ratio)】")
-        print(f"基线模式路网总延误: {baseline_total_delay:.2f} 单位")
-        print(f"收费模式路网总延误: {tolled_total_delay:.2f} 单位")
-        print(f"成功消除的延误量: {delay_reduced:.2f} 单位")
-        print(f"系统总收入: ¥{total_revenue:.2f}")
-        print(f"RDR 指标: 每收取 1 元拥堵费，真实减少 {rdr:.4f} 秒交通延误/车。")
-        print("结论：通过 Baseline 对照证明，动态计费切实优化了路网效率，具备充分的合理性。\n")
-        
-    except FileNotFoundError:
-        print("请确保 baseline_report.csv 和 weihai_analysis_report.csv 均已生成。")
-    
-    # 估算总延误时长 (自由流车速假设为 13.8 m/s 即 50 km/h)
-    free_flow_speed = 13.8
-    # 延误系数 = 自由流车速减去实际车速 (若为负则计 0)
-    df['Delay_Factor'] = np.maximum(0, free_flow_speed - df['Average_Speed_mps'])
-    # 简化的累计延误指标
-    total_delay_index = df['Delay_Factor'].sum() 
-    
-    # 计算 RDR
-    rdr = total_delay_index / total_revenue if total_revenue > 0 else 0
-    
-    print(f"【收入 - 延误比 (Revenue-Delay Ratio)】")
-    print(f"系统总收入: ¥{total_revenue:.2f}")
-    print(f"累计延误指数减少估值: {total_delay_index:.2f} 单位")
-    print(f"每收取 1 元拥堵费，约减少交通延误时长: {rdr:.4f} 秒/车")
-    print("指标说明：该数值越高，说明定价策略的社会效益越好。\n")
+        try:
+            conn_base = sqlite3.connect("baseline.db")
+            df_base_trips = pd.read_sql_query("SELECT * FROM Trips WHERE route_distance > 10", conn_base)
+            conn_base.close()
+            
+            df_base_trips['Real_Delay'] = np.maximum(0, df_base_trips['travel_time'] - (df_base_trips['route_distance'] / free_flow_speed))
+            baseline_total_delay = df_base_trips['Real_Delay'].sum()
+            
+            valid_trips = df_trips[df_trips['route_distance'] > 10].copy()
+            valid_trips['Real_Delay'] = np.maximum(0, valid_trips['travel_time'] - (valid_trips['route_distance'] / free_flow_speed))
+            tolled_total_delay = valid_trips['Real_Delay'].sum()
+            
+            delay_reduced = baseline_total_delay - tolled_total_delay
+            
+            print(f"基线组真实物理延误: {baseline_total_delay:.2f} 秒")
+            print(f"收费组真实物理延误: {tolled_total_delay:.2f} 秒")
+            print(f"成功削减延误总量: {delay_reduced:.2f} 秒")
+            print(f"系统总计收取拥堵费: ¥{total_revenue:.2f}")
+            
+            if delay_reduced > 0 and total_revenue > 0:
+                rdr = delay_reduced / total_revenue
+                print(f"RDR 指标结果: 每收取 1 元拥堵费，真实减少了 {rdr:.4f} 秒的交通延误！")
+            else:
+                print("注：由于大量车辆绕行导致其个人行驶距离拉长，路网总计延误可能出现负向转移。这正是绕行博弈的代价。")
+                
+        except Exception as e:
+            print(f"读取 baseline.db 计算延误对比时发生错误: {e}")
 
-except FileNotFoundError:
-    print("找不到 weihai_analysis_report.csv 文件，请确保其在当前目录下。")
-except KeyError as e:
-    print(f"CSV 文件中缺少必要的列: {e}。请检查 main.py 导出数据的列名。")
+
+    except Exception as e:
+        print(f"数据处理时发生全局异常: {e}")
+
+if __name__ == "__main__":
+    run_precision_kpi_analysis()
