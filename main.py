@@ -29,8 +29,9 @@ def get_toll_fee_per_km(vehicle_count):
     确保价格随拥堵度平滑上升，更符合真实的交通经济学模型。
     """
 
-    # 基础乘数 1，最高乘数 10，拐点在 40 辆车
-    congestion_multiplier = 1 + 9 / (1 + math.exp(-0.08 * (vehicle_count - 40)))
+    # 基础乘数 1，最高乘数 10
+    # 拐点为 25，斜率 0.20
+    congestion_multiplier = 1 + 9 / (1 + math.exp(-0.20 * (vehicle_count - 25)))
     return BASE_RATE_PER_KM * congestion_multiplier
 
 # ==========================================
