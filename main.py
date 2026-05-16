@@ -32,16 +32,10 @@ def init_database(cursor):
         "toll_paid REAL, detoured INTEGER DEFAULT 0, "
         "avg_speed REAL)"
     )
-    cursor.execute(
-        "CREATE TABLE IF NOT EXISTS DetourLog ("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT, veh_id TEXT, "
-        "step INTEGER, edge_id TEXT, "
-        "action TEXT, current_fee REAL)"
-    )
+    # DetourLog 已移除 (原表从未写入任何数据, 为无效死代码)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_trips_veh ON Trips(veh_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_trips_detoured ON Trips(detoured)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_step ON Logs(step)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_detour_veh ON DetourLog(veh_id)")
 
 
 def identify_cbd_edges():
@@ -178,9 +172,12 @@ def run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv",
             vehs_in_cbd = []
             total_speed = 0.0
 
+            # 一次性获取所有车辆位置和速度, 后续预警区循环直接复用缓存
+            veh_positions = {}  # {v_id: (x, y)}
             for v_id in all_vehs:
                 x, y = traci.vehicle.getPosition(v_id)
                 speed = traci.vehicle.getSpeed(v_id)
+                veh_positions[v_id] = (x, y)
                 total_speed += speed
                 if CBD_X_MIN <= x <= CBD_X_MAX and CBD_Y_MIN <= y <= CBD_Y_MAX:
                     vehs_in_cbd.append((v_id, speed))
@@ -206,7 +203,8 @@ def run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv",
                         continue
                     if v_id in curr_vehs_in_zone:
                         continue
-                    x, y = traci.vehicle.getPosition(v_id)
+                    # 复用主循环已缓存的位置, 避免重复调用 TraCI
+                    x, y = veh_positions.get(v_id, (0, 0))
                     if APP_X_MIN <= x <= APP_X_MAX and APP_Y_MIN <= y <= APP_Y_MAX:
                         warned_vehicles.add(v_id)
                         if detour_decision(current_fee_per_km):
@@ -367,12 +365,32 @@ def run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv",
         trip_count = cursor.execute("SELECT COUNT(*) FROM Trips").fetchone()[0]
         print(f"[数据库] Trips 表总记录: {trip_count} 趟")
 
+        # =====================================================
+        # 分流分析修正: 区分"reroute后仍进CBD" vs "真正绕开CBD"
+        # detoured_vehicles = 所有被调用过 rerouteTraveltime 的车
+        # 真正成功绕行 = 被reroute 且 从未出现在 Trips 表的车
+        # =====================================================
+        if enable_tolling:
+            cbd_entrant_ids = set(
+                str(row[0]) for row in
+                cursor.execute("SELECT DISTINCT veh_id FROM Trips").fetchall()
+            )
+            detoured_str = set(str(v) for v in detoured_vehicles)
+            true_avoided = detoured_str - cbd_entrant_ids
+            rerouted_entered = detoured_str & cbd_entrant_ids
+            print(f"[分流分析] 被reroute总数: {len(detoured_vehicles)}")
+            print(f"  ├─ 真正绕开CBD: {len(true_avoided)} 辆")
+            print(f"  └─ reroute后仍进CBD: {len(rerouted_entered)} 辆")
+        else:
+            true_avoided = set()
+
         if not csv_file.closed:
             csv_file.close()
         conn.close()
         traci.close()
 
-    return total_revenue, len(detoured_vehicles)
+    return total_revenue, len(detoured_vehicles), len(true_avoided)
+
 
 
 if __name__ == "__main__":
@@ -380,9 +398,9 @@ if __name__ == "__main__":
     run_simulation(enable_tolling=False, output_csv="baseline_report.csv", db_path="baseline.db")
 
     print("\n>>> 开始执行动态收费实验 (Tolling) <<<")
-    rev, det = run_simulation(
+    rev, det, true_div = run_simulation(
         enable_tolling=True,
         output_csv="weihai_analysis_report.csv",
         db_path="weihai_toll_system.db",
     )
-    print(f"\n仿真完成。总收入: ¥{rev:.2f}, 绕行车辆: {det}")
+    print(f"\n仿真完成。总收入: ¥{rev:.2f} | 被reroute车辆: {det} | 真正绕开CBD: {true_div}")

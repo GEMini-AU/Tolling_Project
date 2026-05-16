@@ -27,7 +27,8 @@ cmd_list = [
     "--fringe-factor", "10",     # 边缘发车权重10倍 → 制造CBD穿越车流
 ]
 
-print(f"路网: {net_file} | 预计发车 ~10800 辆 (10800s / 1.0s)")
+approx_count = int(10800 / 2.7)
+print(f"路网: {net_file} | 预计发车 ~{approx_count} 辆 (10800s / 2.7s)")
 
 try:
     result = subprocess.run(cmd_list, capture_output=True, text=True, check=True)
