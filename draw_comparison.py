@@ -14,16 +14,34 @@ def draw_comprehensive_charts():
         fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 14), sharex=True)
 
         # ==========================================
-        # 图1: CBD 车速对比
+        # 图1: CBD 车速 + 全网均速 (双Y轴)
         # ==========================================
+        color_cbd_base  = 'silver'
+        color_cbd_toll  = 'royalblue'
+        color_glob_base = 'sandybrown'
+        color_glob_toll = 'darkorange'
+
         ax1.plot(df_base['Time_Step'], df_base['CBD_Avg_Speed_mps'] * 3.6,
-                 label='无收费基线模式', color='gray', linestyle='--')
+                 label='CBD 基线均速', color=color_cbd_base, linestyle='--', linewidth=1.5)
         ax1.plot(df_toll['Time_Step'], df_toll['CBD_Avg_Speed_mps'] * 3.6,
-                 label='动态收费干预模式', color='royalblue', linewidth=2)
-        ax1.set_ylabel('CBD 平均车速 (km/h)', fontsize=12)
-        ax1.set_title('图 1: CBD 拥堵早高峰车速对比', fontsize=14, fontweight='bold')
-        ax1.legend(loc='lower right')
+                 label='CBD 收费均速', color=color_cbd_toll, linewidth=2)
+        ax1.set_ylabel('CBD 平均车速 (km/h)', fontsize=11, color=color_cbd_toll)
+        ax1.tick_params(axis='y', labelcolor=color_cbd_toll)
         ax1.set_ylim(bottom=0)
+
+        ax1_twin = ax1.twinx()
+        ax1_twin.plot(df_base['Time_Step'], df_base['Global_Avg_Speed_mps'] * 3.6,
+                      label='全网 基线均速', color=color_glob_base, linestyle=':', linewidth=1.5)
+        ax1_twin.plot(df_toll['Time_Step'], df_toll['Global_Avg_Speed_mps'] * 3.6,
+                      label='全网 收费均速', color=color_glob_toll, linewidth=2, linestyle='-.')
+        ax1_twin.set_ylabel('全网平均车速 (km/h)', fontsize=11, color=color_glob_toll)
+        ax1_twin.tick_params(axis='y', labelcolor=color_glob_toll)
+        ax1_twin.set_ylim(bottom=0)
+
+        ax1.set_title('图 1: 峰值车速对比 — CBD 区域 vs 全网均速', fontsize=14, fontweight='bold')
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax1_twin.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='lower right', fontsize=9)
 
         # ==========================================
         # 图2: CBD 车辆密度 + 费率
@@ -32,7 +50,7 @@ def draw_comprehensive_charts():
                  label='无收费基线车辆数', color='gray', linestyle='--')
         ax2.plot(df_toll['Time_Step'], df_toll['Vehicles_in_CBD'],
                  label='动态收费驻留车辆数', color='crimson', linewidth=2)
-        ax2.axhline(y=50, color='orange', linestyle=':', label='Logistic 拥堵拐点 (50辆)')
+        ax2.axhline(y=25, color='orange', linestyle=':', label='Logistic 拥堵拐点 (25辆)')
         ax2.set_ylabel('CBD 驻留车辆数', fontsize=12)
         ax2.set_title('图 2: 动态定价驱离分流效果', fontsize=14, fontweight='bold')
         ax2.legend(loc='upper right')

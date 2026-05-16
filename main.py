@@ -127,7 +127,8 @@ def run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv",
     step = 0
     total_revenue = 0.0
     detoured_vehicles = set()
-    veh_distance_tracker = {}
+    veh_distance_tracker = {}    # 里程计费用（收费模式），每500m重置
+    cbd_cumulative_dist   = {}    # 进入CBD后的累计行驶距离（基线+收费都更新），用于精确记录route_distance
     active_trips = {}
 
     # 预警区: CBD 外扩 300 米, 模拟司机看到"前方收费"提示牌
@@ -181,6 +182,8 @@ def run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv",
                 total_speed += speed
                 if CBD_X_MIN <= x <= CBD_X_MAX and CBD_Y_MIN <= y <= CBD_Y_MAX:
                     vehs_in_cbd.append((v_id, speed))
+                    # 不论是否收费模式，都累计 CBD 内行驶距离（1步=1秒，speed m/s × 1s = meters）
+                    cbd_cumulative_dist[v_id] = cbd_cumulative_dist.get(v_id, 0.0) + speed
 
             curr_vehs_in_zone = [v[0] for v in vehs_in_cbd]
             cbd_count = len(vehs_in_cbd)
@@ -235,12 +238,12 @@ def run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv",
                     traci.vehicle.getRoadID(v_id) if v_id in all_vehs else "EXITED"
                 )
                 travel_time = exit_step - trip["enter_step"]
-                final_dist = (
-                    traci.vehicle.getDistance(v_id)
-                    if v_id in all_vehs
-                    else trip["initial_distance"] + 2000
-                )
-                route_distance = max(0, final_dist - trip["initial_distance"])
+                if v_id in all_vehs:
+                    final_dist = traci.vehicle.getDistance(v_id)
+                    route_distance = max(0, final_dist - trip["initial_distance"])
+                else:
+                    # 车辆退出CBD的同一步离开路网，用累计距离追踪器（基线/收费都有记录）
+                    route_distance = max(0, cbd_cumulative_dist.get(v_id, 0.0))
                 avg_speed_trip = (route_distance / travel_time) if travel_time > 0 else 0
 
                 cursor.execute(
@@ -346,10 +349,8 @@ def run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv",
                 # 车还在路网里 (仿真时间到了但车没跑完)
                 rd = max(0, traci.vehicle.getDistance(v_id) - trip["initial_distance"])
             else:
-                # 车已离开路网但GPS离开时没捕获到 — 用里程计费已累计的距离代替
-                charged_dist = veh_distance_tracker.get(v_id, 0)
-                # 已付费距离 = 完整的 CHARGE_INTERVAL_METERS 整数倍，加上本次剩余
-                rd = charged_dist if charged_dist > 0 else 0
+                # 车已离开路网但GPS离开时没捕获到 — 用累计距离追踪器（基线/收费都有记录）
+                rd = max(0, cbd_cumulative_dist.get(v_id, 0.0))
             cursor.execute(
                 "INSERT INTO Trips (veh_id, enter_step, exit_step, enter_edge, "
                 "exit_edge, travel_time, route_distance, toll_paid, detoured, avg_speed) "

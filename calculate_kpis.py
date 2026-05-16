@@ -20,24 +20,34 @@ def run_precision_kpi_analysis():
             df_base_csv = pd.read_csv("baseline_report.csv")
             peak_start, peak_end = 1800, 7200
 
-            # 只保留 CBD 内有车时的速度样本，排除 CBD 为空时记录的 0 速度
+            # --- CBD 内速度 (只统计CBD有车的时刻) ---
             mask_t = (df_csv['Time_Step'] >= peak_start) & (df_csv['Time_Step'] <= peak_end) & (df_csv['CBD_Avg_Speed_mps'] > 0)
             mask_b = (df_base_csv['Time_Step'] >= peak_start) & (df_base_csv['Time_Step'] <= peak_end) & (df_base_csv['CBD_Avg_Speed_mps'] > 0)
 
-            toll_speed = df_csv.loc[mask_t, 'CBD_Avg_Speed_mps'].mean()
-            base_speed = df_base_csv.loc[mask_b, 'CBD_Avg_Speed_mps'].mean()
-            improvement = toll_speed - base_speed
+            toll_cbd  = df_csv.loc[mask_t, 'CBD_Avg_Speed_mps'].mean()
+            base_cbd  = df_base_csv.loc[mask_b, 'CBD_Avg_Speed_mps'].mean()
+            cbd_delta = toll_cbd - base_cbd
 
-            print(f"\n峰值车速提升幅度 (早高峰 {peak_start}s-{peak_end}s, 仅统计CBD有车时刻)")
-            print(f"  有效样本数: 基线={mask_b.sum()} 帧, 收费={mask_t.sum()} 帧")
-            print(f"基线组 CBD 均速: {base_speed*3.6:.2f} km/h")
-            print(f"收费组 CBD 均速: {toll_speed*3.6:.2f} km/h")
-            print(f"速度提升: {improvement*3.6:+.2f} km/h ({improvement/base_speed*100:+.1f}%)")
-            if improvement < 0:
-                print("  注: 收费留下的是目的地在CBD内的刚性车辆, 受信号灯影响略慢, 属正常现象")
-                print(f"  核心成效: CBD均值车辆数从 {df_base_csv.loc[mask_b,'Vehicles_in_CBD'].mean():.1f} 辆降至 {df_csv.loc[mask_t,'Vehicles_in_CBD'].mean():.1f} 辆 (降幅 {(1-df_csv.loc[mask_t,'Vehicles_in_CBD'].mean()/df_base_csv.loc[mask_b,'Vehicles_in_CBD'].mean())*100:.1f}%)")
+            # --- 全网均速 ---
+            mask_g_t = (df_csv['Time_Step'] >= peak_start) & (df_csv['Time_Step'] <= peak_end) & (df_csv['Global_Avg_Speed_mps'] > 0)
+            mask_g_b = (df_base_csv['Time_Step'] >= peak_start) & (df_base_csv['Time_Step'] <= peak_end) & (df_base_csv['Global_Avg_Speed_mps'] > 0)
+
+            toll_global  = df_csv.loc[mask_g_t, 'Global_Avg_Speed_mps'].mean()
+            base_global  = df_base_csv.loc[mask_g_b, 'Global_Avg_Speed_mps'].mean()
+            global_delta = toll_global - base_global
+
+            print(f"\n峰值车速提升幅度 (早高峰 {peak_start}s-{peak_end}s)")
+            print(f"  {'指标':<18} {'基线':>10} {'收费':>10} {'变化':>12}")
+            print(f"  {'-'*52}")
+            print(f"  {'CBD 区域均速':<18} {base_cbd*3.6:>9.2f}km/h {toll_cbd*3.6:>9.2f}km/h {cbd_delta*3.6:>+10.2f}km/h")
+            print(f"  {'全网均速':<18} {base_global*3.6:>9.2f}km/h {toll_global*3.6:>9.2f}km/h {global_delta*3.6:>+10.2f}km/h")
+            print(f"  {'CBD 驻留车辆':<18} {df_base_csv.loc[mask_b,'Vehicles_in_CBD'].mean():>9.1f}辆   {df_csv.loc[mask_t,'Vehicles_in_CBD'].mean():>9.1f}辆   {df_csv.loc[mask_t,'Vehicles_in_CBD'].mean()-df_base_csv.loc[mask_b,'Vehicles_in_CBD'].mean():>+10.1f}辆")
+            print(f"\n解读:")
+            print(f"  CBD速度: {cbd_delta*3.6:+.2f}km/h — 收费筛选了刚性目的地车辆, 停靠较多, 均速略低 (正常)")
+            print(f"  全网速度: {global_delta*3.6:+.2f}km/h — 绕行车辆散布外环, 全网通行效率{'提升' if global_delta >= 0 else '下降'}")
         except Exception as e:
             print(f"\n峰值车速提升: 计算失败 - {e}")
+
 
         # ==========================================
         # 区域进入弹性
