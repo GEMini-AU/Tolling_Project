@@ -344,7 +344,14 @@ def run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv",
         # 仿真结束后, 记录仍在 CBD 内的车辆 (末班车)
         for v_id, trip in list(active_trips.items()):
             travel_time = step - trip["enter_step"]
-            rd = max(0, traci.vehicle.getDistance(v_id) - trip["initial_distance"]) if v_id in traci.vehicle.getIDList() else 2000
+            if v_id in traci.vehicle.getIDList():
+                # 车还在路网里 (仿真时间到了但车没跑完)
+                rd = max(0, traci.vehicle.getDistance(v_id) - trip["initial_distance"])
+            else:
+                # 车已离开路网但GPS离开时没捕获到 — 用里程计费已累计的距离代替
+                charged_dist = veh_distance_tracker.get(v_id, 0)
+                # 已付费距离 = 完整的 CHARGE_INTERVAL_METERS 整数倍，加上本次剩余
+                rd = charged_dist if charged_dist > 0 else 0
             cursor.execute(
                 "INSERT INTO Trips (veh_id, enter_step, exit_step, enter_edge, "
                 "exit_edge, travel_time, route_distance, toll_paid, detoured, avg_speed) "
@@ -352,7 +359,7 @@ def run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv",
                 (v_id, trip["enter_step"], step, trip["enter_edge"],
                  "SIM_END", travel_time, rd,
                  trip["toll_paid"], trip["detoured"],
-                 rd / travel_time if travel_time > 0 else 0),
+                 rd / travel_time if travel_time > 0 and rd > 0 else 0),
             )
 
         # 确保末班车数据提交

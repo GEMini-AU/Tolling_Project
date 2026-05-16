@@ -56,7 +56,9 @@ DETOUR_TIME_MIN, DETOUR_TIME_MAX = 60, 180
 EXPECTED_CBD_DISTANCE_KM = 1.5
 
 # 路权惩罚换算系数: 元/km → 等效秒/km
-# 以 30km/h (8.33m/s) 城市速度为基准, 驾驶员时间价值取中位 0.05 元/秒
-# 换算: 1 元/km 的额外费用 = 1/(0.05 元/s × 8.33m/s × 0.001 km/m) = 2.4 秒/km
-# 取整: 每元/km 罚时 2.5 秒/km
+# 推导: 绕行路径比直穿CBD约多1600m, 在30km/h下多192秒
+# 要让SUMO路由器选绕行, CBD的惩罚必须使: penalized_cbd_time > detour_time
+# 即: actual_tt + fee × factor × len/1000 > 432s
+# 解出: factor > (432 - 240) / (10 × 2) = 9.6, 取20留出余量确保5元/km时也触发
 TOLL_TO_TIME_FACTOR = 20
+

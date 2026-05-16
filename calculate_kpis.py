@@ -141,7 +141,14 @@ def run_precision_kpi_analysis():
 
                 if delay_reduced > 0 and total_revenue > 0:
                     rdr = delay_reduced / total_revenue
-                    print(f"RDR: 每收 1 元拥堵费, 减少 {rdr:.2f} 秒延误")
+                    print(f"RDR (总量口径): 每收 1 元拥堵费, 全网减少 {rdr:.2f} 秒延误")
+                    # 归一化口径: 消除行程数差异的影响
+                    base_per_trip = baseline_delay / len(df_base_trips)
+                    toll_per_trip = tolled_delay / len(valid) if len(valid) > 0 else 0
+                    per_trip_improve = base_per_trip - toll_per_trip
+                    rdr_norm = per_trip_improve * len(valid) / total_revenue
+                    print(f"  基线每趟延误: {base_per_trip:.1f}秒, 收费每趟延误: {toll_per_trip:.1f}秒")
+                    print(f"RDR (归一化口径): 每收 1 元拥堵费, 等效减少 {rdr_norm:.2f} 秒延误")
                 elif delay_reduced <= 0:
                     print("注意: 延误未减少, 绕行车辆可能拉长了路网总行程时间")
         except Exception as e:
