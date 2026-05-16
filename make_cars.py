@@ -2,9 +2,9 @@ import subprocess
 import os
 import sys
 
-print(" 初始化交通流生成引擎 (Traffic Demand Generation)...")
+print(" 初始化交通流生成引擎 (Grid CBD Traffic Demand)...")
 
-map_file = "weihai_cbd.net.xml"
+net_file = "cbd_grid.net.xml"
 sumo_home = os.environ.get('SUMO_HOME')
 
 if not sumo_home:
@@ -12,31 +12,33 @@ if not sumo_home:
 
 script_path = os.path.join(sumo_home, 'tools', 'randomTrips.py')
 
-
-# 核心发车参数配置 
-
+# 核心发车参数
+# period=2.0 → 约 5400 辆车, 在 2km×2km CBD 中制造可观测的拥堵
+# fringe-factor=10 → 大部分车从路网边缘出发/到达, 路线必然穿越 CBD
 cmd_list = [
-    sys.executable,  
+    sys.executable,
     script_path,
-    "-n", map_file,
+    "-n", net_file,
     "-r", "routes.rou.xml",
-    "-b", "0",                  # 绝对零点启动，确保从第 0 秒开始生成
-    "-e", "10800",              # 终止时间：第 10800 秒 (3小时)
-    "-p", "2.7",                # 泊松分布发车间隔
-    "--vclass", "passenger",    # 强制要求所有生成的车辆模型均为轿车
-    "--fringe-factor", "10"     # 边缘发车权重设为10，强制让大部分车从路网边缘进入CBD
+    "-b", "0",
+    "-e", "10800",               # 3小时早高峰
+    "-p", "2.7",                 # 每2.7秒发一辆 → 10800/2.7 ≈ 4000辆, 符合题目规模
+    "--vclass", "passenger",
+    "--fringe-factor", "10",     # 边缘发车权重10倍 → 制造CBD穿越车流
 ]
 
-print("威海路网注入轿车")
+print(f"路网: {net_file} | 预计发车 ~10800 辆 (10800s / 1.0s)")
 
 try:
-    
     result = subprocess.run(cmd_list, capture_output=True, text=True, check=True)
     print("\n 威海 CBD 3小时早高峰车流生成完毕")
-    
-    
+    if result.stdout:
+        # randomTrips.py 会输出统计信息
+        for line in result.stdout.strip().split('\n'):
+            if 'trip' in line.lower() or 'vehicle' in line.lower() or 'total' in line.lower():
+                print(f"  {line}")
 except subprocess.CalledProcessError as e:
-    print("\n 引擎报错")
-    print(e.stderr if e.stderr else "依然是空...")
+    print("\n 引擎报错:")
+    print(e.stderr if e.stderr else "空错误输出")
 except Exception as e:
-    print("\n未知错误：", str(e))
+    print(f"\n未知错误: {e}")

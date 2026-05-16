@@ -1,145 +1,183 @@
-import os
-import sys
+import os, sys, csv, random
 import traci
 import sqlite3
-import csv
-import random
-import math
 
-# ==========================================
-#               仿真全局配置参数 
-# ==========================================
-SIM_STEPS = 10800              # 仿真总时长 (3小时 = 10800 秒)
-DETOUR_PROBABILITY = 0.7       # 绕行概率阈值 (70% 的车辆会因为拥堵费绕路)
-INITIAL_BALANCE = 100.0        # 账户初始余额 (元)
+from config import (
+    SIM_STEPS, INITIAL_BALANCE, NET_FILE, ROUTE_FILE, PARK_FILE,
+    CBD_X_MIN, CBD_X_MAX, CBD_Y_MIN, CBD_Y_MAX,
+    CHARGE_INTERVAL_METERS, TOLL_THRESHOLD_HIGH,
+    VOT_MIN, VOT_MAX, DETOUR_TIME_MIN, DETOUR_TIME_MAX,
+    EXPECTED_CBD_DISTANCE_KM, TOLL_TO_TIME_FACTOR, get_toll_fee_per_km,
+)
 
-# 基于距离的收费参数
-BASE_RATE_PER_KM = 2.0         # 基础费率：畅通时每公里 2.0 元
-CHARGE_INTERVAL_METERS = 500.0 # 虚拟收费门架：每累计行驶 500 米（0.5公里）触发一次账单结算
-TOLL_THRESHOLD_HIGH = 5.0      # 触发绕行博弈的敏感费率（元/公里）
-
-# CBD 核心区地理围栏坐标
-CBD_X_MIN, CBD_X_MAX = 99.26, 701.14
-CBD_Y_MIN, CBD_Y_MAX = -510.77, 312.23
-
-def get_toll_fee_per_km(vehicle_count):
-    """
-    连续型 Logistic 动态定价机制
-    替代原有的阶梯式跳变费率。
-    确保价格随拥堵度平滑上升，更符合真实的交通经济学模型。
-    """
-
-    # 基础乘数 1，最高乘数 10
-    # 拐点为 25，斜率 0.20
-    congestion_multiplier = 1 + 9 / (1 + math.exp(-0.20 * (vehicle_count - 25)))
-    return BASE_RATE_PER_KM * congestion_multiplier
-
-# ==========================================
-#               环境与工具初始化
-# ==========================================
-if 'SUMO_HOME' in os.environ:
-    tools = os.path.join(os.environ['SUMO_HOME'], 'tools')
-    sys.path.append(tools)
-else:
+if 'SUMO_HOME' not in os.environ:
     sys.exit("环境变量中未声明 'SUMO_HOME'，请配置后重试。")
-
-# 启动命令配置 (包含路网、路由、绿地附加文件)
-
-sumo_cmd = [
-    "sumo-gui",
-    "-n", "weihai_cbd.net.xml",
-    "-r", "routes.rou.xml",
-    "-a", "parks.add.xml",
-    "--start"
-]
+tools = os.path.join(os.environ['SUMO_HOME'], 'tools')
+sys.path.append(tools)
 
 
-
-# 将原有的 run_simulation() 改为带参数的函数
-def run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv", db_path="weihai_toll_system.db"):
-    """
-    核心仿真主函数
-    :param enable_tolling: 是否开启动态收费与绕行博弈（True为实验组，False为基线组）
-    :param output_csv: 数据报表导出路径
-    """
-    traci.start(sumo_cmd)
-    
-    #无论是否收费，都连接对应的数据库，基线组也要记录 Trips
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")  # 开启 WAL 提升并发性能
-    cursor = conn.cursor()
-    
-    # 钱包表
+def init_database(cursor):
     cursor.execute("CREATE TABLE IF NOT EXISTS Wallet (veh_id TEXT PRIMARY KEY, balance REAL)")
-    # 日志表，增加 remark 字段，用于标记欠费
-    cursor.execute("CREATE TABLE IF NOT EXISTS Logs (id INTEGER PRIMARY KEY AUTOINCREMENT, veh_id TEXT, amount REAL, step INTEGER, remark TEXT DEFAULT 'PAID')")
-    
-    # 行程表
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS Trips (
-            trip_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            veh_id TEXT,
-            enter_step INTEGER,
-            exit_step INTEGER,
-            enter_edge TEXT,
-            exit_edge TEXT,
-            travel_time REAL,
-            route_distance REAL,
-            toll_paid REAL,
-            detoured INTEGER DEFAULT 0,
-            avg_speed REAL
-        )
-    """)
-    
-    # 为高频查询字段建立索引，速度提升百倍
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS Logs ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, veh_id TEXT, "
+        "amount REAL, step INTEGER, remark TEXT DEFAULT 'PAID')"
+    )
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS Trips ("
+        "trip_id INTEGER PRIMARY KEY AUTOINCREMENT, veh_id TEXT, "
+        "enter_step INTEGER, exit_step INTEGER, "
+        "enter_edge TEXT, exit_edge TEXT, "
+        "travel_time REAL, route_distance REAL, "
+        "toll_paid REAL, detoured INTEGER DEFAULT 0, "
+        "avg_speed REAL)"
+    )
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS DetourLog ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, veh_id TEXT, "
+        "step INTEGER, edge_id TEXT, "
+        "action TEXT, current_fee REAL)"
+    )
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_trips_veh ON Trips(veh_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_trips_detoured ON Trips(detoured)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_step ON Logs(step)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_detour_veh ON DetourLog(veh_id)")
 
+
+def identify_cbd_edges():
+    """扫描全网边, 找出位于 CBD 内的边"""
+    cbd_edges = set()
+    for edge_id in traci.edge.getIDList():
+        lanes = traci.edge.getLaneNumber(edge_id)
+        if lanes == 0:
+            continue
+        shape = traci.lane.getShape(f"{edge_id}_0")
+        if not shape:
+            continue
+        # 检查车道中点是否在 CBD 内
+        mid_idx = len(shape) // 2
+        mx, my = shape[mid_idx][0], shape[mid_idx][1]
+        if CBD_X_MIN <= mx <= CBD_X_MAX and CBD_Y_MIN <= my <= CBD_Y_MAX:
+            cbd_edges.add(edge_id)
+    return cbd_edges
+
+
+def update_cbd_edge_efforts(cbd_edges, current_fee_per_km, current_step):
+    """
+    用 adaptTraveltime 给 CBD 边设置惩罚后的总行程时间。
+
+    [关键] adaptTraveltime 需要传入的是"总行程时间"(actual + penalty),
+    而不是"额外惩罚量"。若只传惩罚量(如10秒), 但边正常需要48秒,
+    SUMO 会认为 CBD 边只需10秒, 反而吸引更多车流!
+
+    正确做法: 先读取边的实际通行时间, 再加上货币换算的惩罚秒数。
+    """
+    if current_fee_per_km <= 0:
+        return
+    extra_seconds_per_km = current_fee_per_km * TOLL_TO_TIME_FACTOR
+
+    for edge_id in cbd_edges:
+        if traci.edge.getLaneNumber(edge_id) <= 0:
+            continue
+        edge_len_m = traci.lane.getLength(f"{edge_id}_0")
+        if edge_len_m <= 0:
+            continue
+        # 读取当前实际平均速度 (m/s), 至少 1 m/s 防除零
+        mean_speed = max(traci.edge.getLastStepMeanSpeed(edge_id), 1.0)
+        # 实际通行时间 (秒)
+        actual_tt = edge_len_m / mean_speed
+        # 货币成本换算的惩罚秒数
+        penalty_seconds = extra_seconds_per_km * (edge_len_m / 1000.0)
+        # 传入 actual + penalty, 让 SUMO 路由器看到正确的总耗时
+        traci.edge.adaptTraveltime(edge_id, actual_tt + penalty_seconds,
+                                   current_step, SIM_STEPS)
+
+
+def detour_decision(current_fee_per_km):
+    if current_fee_per_km <= 0:
+        return False
+    expected_savings = current_fee_per_km * EXPECTED_CBD_DISTANCE_KM
+    driver_vot = random.uniform(VOT_MIN, VOT_MAX)
+    detour_extra_seconds = random.uniform(DETOUR_TIME_MIN, DETOUR_TIME_MAX)
+
+    if expected_savings > (detour_extra_seconds * driver_vot):
+        return True
+    elif current_fee_per_km >= TOLL_THRESHOLD_HIGH:
+        return random.random() < 0.4
+    else:
+        return random.random() < 0.05
+
+
+def run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv",
+                   db_path="weihai_toll_system.db"):
+    cmd = ["sumo", "-n", NET_FILE, "-r", ROUTE_FILE, "-a", PARK_FILE]
+    traci.start(cmd)
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    cursor = conn.cursor()
+    init_database(cursor)
+
+    # 预计算 CBD 边
+    cbd_edges = identify_cbd_edges()
+    print(f"CBD 收费边: {len(cbd_edges)} 条")
 
     csv_file = open(output_csv, "w", newline="", encoding="utf-8")
     csv_writer = csv.writer(csv_file)
-    csv_writer.writerow(["Time_Step", "Vehicles_in_CBD", "Current_Toll_Fee", "Average_Speed_mps", "Total_Revenue", "Detoured_Vehicles"])
+    csv_writer.writerow([
+        "Time_Step", "Vehicles_in_CBD", "Current_Toll_Fee",
+        "CBD_Avg_Speed_mps", "Global_Avg_Speed_mps",
+        "Total_Revenue", "Detoured_Vehicles"
+    ])
 
     step = 0
     total_revenue = 0.0
-    total_detoured = 0
-    detoured_vehicles_set = set()
-    veh_distance_tracker = {}  
+    detoured_vehicles = set()
+    veh_distance_tracker = {}
+    active_trips = {}
 
-    # 绘制 CBD 电子围栏
+    # 预警区: CBD 外扩 300 米, 模拟司机看到"前方收费"提示牌
+    APPROACH_MARGIN = 300.0
+    APP_X_MIN = CBD_X_MIN - APPROACH_MARGIN
+    APP_X_MAX = CBD_X_MAX + APPROACH_MARGIN
+    APP_Y_MIN = CBD_Y_MIN - APPROACH_MARGIN
+    APP_Y_MAX = CBD_Y_MAX + APPROACH_MARGIN
 
     try:
-
         traci.polygon.add(
-
             polygonID="CBD_ZONE",
-
-            shape=[(CBD_X_MIN, CBD_Y_MIN), (CBD_X_MAX, CBD_Y_MIN), (CBD_X_MAX, CBD_Y_MAX), (CBD_X_MIN, CBD_Y_MAX), (CBD_X_MIN, CBD_Y_MIN)],
-
+            shape=[
+                (CBD_X_MIN, CBD_Y_MIN), (CBD_X_MAX, CBD_Y_MIN),
+                (CBD_X_MAX, CBD_Y_MAX), (CBD_X_MIN, CBD_Y_MAX),
+                (CBD_X_MIN, CBD_Y_MIN)
+            ],
             color=(255, 0, 0, 150), fill=False, lineWidth=8
-
         )
+        traci.polygon.add(
+            polygonID="APPROACH_ZONE",
+            shape=[
+                (APP_X_MIN, APP_Y_MIN), (APP_X_MAX, APP_Y_MIN),
+                (APP_X_MAX, APP_Y_MAX), (APP_X_MIN, APP_Y_MAX),
+                (APP_X_MIN, APP_Y_MIN)
+            ],
+            color=(255, 165, 0, 50), fill=True, lineWidth=2
+        )
+    except Exception:
+        pass
 
-    except:
-
-        pass 
+    warned_vehicles = set()  # 已在预警区完成决策的车
 
     mode_name = "【动态收费模式】" if enable_tolling else "【无收费基线模式】"
-    print(f"\n--- 仿真启动，当前执行: {mode_name} ---")
+    print(f"\n--- 仿真启动: {mode_name} ---")
+    print(f"路网: {NET_FILE} | CBD: ({CBD_X_MIN},{CBD_Y_MIN})→({CBD_X_MAX},{CBD_Y_MAX})")
 
     try:
-        # 用于追踪当前在 CBD 内的车辆行程状态
-        active_trips = {}
         while step < SIM_STEPS:
             traci.simulationStep()
             all_vehs = traci.vehicle.getIDList()
             vehs_in_cbd = []
             total_speed = 0.0
-            
-            # ==========================================
-            # 扫描全网车辆，确定谁在 CBD 内
-            # ==========================================
+
             for v_id in all_vehs:
                 x, y = traci.vehicle.getPosition(v_id)
                 speed = traci.vehicle.getSpeed(v_id)
@@ -149,15 +187,38 @@ def run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv",
 
             curr_vehs_in_zone = [v[0] for v in vehs_in_cbd]
             cbd_count = len(vehs_in_cbd)
-            avg_speed = (total_speed / len(all_vehs)) if all_vehs else 0.0
-            
-            # 获取当前实时的 元/公里 费率
+            cbd_speed = sum(v[1] for v in vehs_in_cbd) / cbd_count if cbd_count > 0 else 0.0
+            global_avg_speed = (total_speed / len(all_vehs)) if all_vehs else 0.0
             current_fee_per_km = get_toll_fee_per_km(cbd_count) if enable_tolling else 0.0
 
             # ==========================================
-            # 行程审计逻辑：入场与出场
+            # CBD 边路权惩罚 (每 30 步更新)
             # ==========================================
-            # A. 检测新进入 CBD 的车辆（入场记录）
+            if enable_tolling and step % 30 == 0:
+                update_cbd_edge_efforts(cbd_edges, current_fee_per_km, step)
+
+            # ==========================================
+            # 预警区绕行决策 — 车还没进 CBD, 提前 reroute
+            # ==========================================
+            if enable_tolling and step % 5 == 0:
+                for v_id in all_vehs:
+                    if v_id in detoured_vehicles or v_id in warned_vehicles:
+                        continue
+                    if v_id in curr_vehs_in_zone:
+                        continue
+                    x, y = traci.vehicle.getPosition(v_id)
+                    if APP_X_MIN <= x <= APP_X_MAX and APP_Y_MIN <= y <= APP_Y_MAX:
+                        warned_vehicles.add(v_id)
+                        if detour_decision(current_fee_per_km):
+                            traci.vehicle.rerouteTraveltime(v_id)
+                            detoured_vehicles.add(v_id)
+                            traci.vehicle.setColor(v_id, (0, 100, 255))
+                        else:
+                            traci.vehicle.setColor(v_id, (255, 200, 0))
+
+            # ==========================================
+            # 行程审计
+            # ==========================================
             for v_id, speed in vehs_in_cbd:
                 if v_id not in active_trips:
                     active_trips[v_id] = {
@@ -165,93 +226,87 @@ def run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv",
                         "enter_edge": traci.vehicle.getRoadID(v_id),
                         "initial_distance": traci.vehicle.getDistance(v_id),
                         "toll_paid": 0.0,
-                        "detoured": 0
+                        "detoured": 0,
                     }
 
-            # B. 检测离开 CBD 或消失的车辆（离场结算）
-            exited_vehs = [v_id for v_id in active_trips if v_id not in curr_vehs_in_zone]
+            exited_vehs = [v for v in active_trips if v not in curr_vehs_in_zone]
             for v_id in exited_vehs:
                 trip = active_trips[v_id]
                 exit_step = step
-                exit_edge = traci.vehicle.getRoadID(v_id) if v_id in all_vehs else "EXITED"
-                
+                exit_edge = (
+                    traci.vehicle.getRoadID(v_id) if v_id in all_vehs else "EXITED"
+                )
                 travel_time = exit_step - trip["enter_step"]
-                final_dist = traci.vehicle.getDistance(v_id) if v_id in all_vehs else trip["initial_distance"] + 2000
+                final_dist = (
+                    traci.vehicle.getDistance(v_id)
+                    if v_id in all_vehs
+                    else trip["initial_distance"] + 2000
+                )
                 route_distance = max(0, final_dist - trip["initial_distance"])
                 avg_speed_trip = (route_distance / travel_time) if travel_time > 0 else 0
-                
 
-                cursor.execute("""
-                    INSERT INTO Trips (veh_id, enter_step, exit_step, enter_edge, exit_edge, travel_time, route_distance, toll_paid, detoured, avg_speed)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (v_id, trip["enter_step"], exit_step, trip["enter_edge"], exit_edge, travel_time, route_distance, trip["toll_paid"], trip["detoured"], avg_speed_trip))
-                
+                cursor.execute(
+                    "INSERT INTO Trips (veh_id, enter_step, exit_step, enter_edge, "
+                    "exit_edge, travel_time, route_distance, toll_paid, detoured, avg_speed) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (v_id, trip["enter_step"], exit_step, trip["enter_edge"],
+                     exit_edge, travel_time, route_distance,
+                     trip["toll_paid"], trip["detoured"], avg_speed_trip),
+                )
                 del active_trips[v_id]
 
             # ==========================================
-            # 核心业务逻辑：里程计费与绕行博弈
+            # 里程计费 (GPS 电子围栏)
             # ==========================================
             if enable_tolling:
                 for v_id, speed in vehs_in_cbd:
                     if v_id not in veh_distance_tracker:
                         veh_distance_tracker[v_id] = 0.0
                     veh_distance_tracker[v_id] += speed
-                    
+
                     if veh_distance_tracker[v_id] >= CHARGE_INTERVAL_METERS:
                         charge_amount = current_fee_per_km * (CHARGE_INTERVAL_METERS / 1000.0)
                         try:
-                            #使用 with conn 上下文管理器
-                            # Python 会在此处自动开启事务。
-                            # 如果块内代码全部成功，自动执行 COMMIT；如果触发任何异常，自动执行 ROLLBACK。
                             with conn:
-                                cursor.execute("INSERT OR IGNORE INTO Wallet VALUES (?, ?)", (v_id, INITIAL_BALANCE))
-                                # 包含防刷钱约束的扣款
-                                cursor.execute("UPDATE Wallet SET balance = balance - ? WHERE veh_id = ? AND balance >= ?", (charge_amount, v_id, charge_amount))
-                                
+                                cursor.execute(
+                                    "INSERT OR IGNORE INTO Wallet VALUES (?, ?)",
+                                    (v_id, INITIAL_BALANCE),
+                                )
+                                cursor.execute(
+                                    "UPDATE Wallet SET balance = balance - ? "
+                                    "WHERE veh_id = ? AND balance >= ?",
+                                    (charge_amount, v_id, charge_amount),
+                                )
                                 if cursor.rowcount > 0:
-                                    cursor.execute("INSERT INTO Logs (veh_id, amount, step, remark) VALUES (?, ?, ?, 'PAID')", (v_id, charge_amount, step))
+                                    cursor.execute(
+                                        "INSERT INTO Logs (veh_id, amount, step, remark) "
+                                        "VALUES (?, ?, ?, 'PAID')",
+                                        (v_id, charge_amount, step),
+                                    )
                                     total_revenue += charge_amount
                                     if v_id in active_trips:
                                         active_trips[v_id]["toll_paid"] += charge_amount
                                 else:
-                                    cursor.execute("INSERT INTO Logs (veh_id, amount, step, remark) VALUES (?, ?, ?, 'DEBT_VIOLATION')", (v_id, charge_amount, step))
-                                    
+                                    cursor.execute(
+                                        "INSERT INTO Logs (veh_id, amount, step, remark) "
+                                        "VALUES (?, ?, ?, 'DEBT_VIOLATION')",
+                                        (v_id, charge_amount, step),
+                                    )
                         except Exception as e:
-                            # 拒绝静默吞没异常，一旦回滚，立刻在终端高亮打印死因！
-                            print(f"🚨 [ACID 事务回滚] 车辆: {v_id}, 仿真步: {step}, 错误详情: {e}")
-                            
-                        
-                        veh_distance_tracker[v_id] -= CHARGE_INTERVAL_METERS 
-                        
-                        # 绕行动作判定
-                        # 基于时间价值 (VOT) 的理性绕行博弈模型
-                        if current_fee_per_km >= TOLL_THRESHOLD_HIGH:
-                            # 估算预期拥堵费 (假设平均需要再开 1.5 公里穿越 CBD)
-                            expected_toll_savings = current_fee_per_km * 1.5
-                            
-                            # 为当前司机生成随机的时间价值 (元/秒) 和预估绕行时间
-                            # 假设时间价值在 0.02 到 0.08 元/秒之间 (折合时薪 72~288 元)
-                            driver_value_of_time = random.uniform(0.02, 0.08) 
-                            # 预估绕开收费区需要多花 180 ~ 420 秒 (3~7分钟)
-                            detour_extra_seconds = random.uniform(180, 420)
-                            
-                            #理性经济决策：如果省下的钱，值得上多花的时间，就绕行！
-                            if expected_toll_savings > (detour_extra_seconds * driver_value_of_time):
-                                traci.vehicle.rerouteTraveltime(v_id) 
-                                detoured_vehicles_set.add(v_id) # 加入去重集合
-                                traci.vehicle.setColor(v_id, (0, 100, 255)) # 绕行变蓝
-                                
-                                if v_id in active_trips:
-                                    active_trips[v_id]["detoured"] = 1
-                            else:
-                                # 嫌绕路太费时间，咬牙硬交钱死磕
-                                traci.vehicle.setColor(v_id, (255, 0, 0))
+                            print(f"[ACID 事务回滚] {v_id}, step {step}: {e}")
+
+                        veh_distance_tracker[v_id] -= CHARGE_INTERVAL_METERS
+
+                        # 绕行决策 → rerouteTraveltime 现在会感知 CBD 边的高代价
+                        if v_id not in detoured_vehicles and detour_decision(current_fee_per_km):
+                            traci.vehicle.rerouteTraveltime(v_id)
+                            detoured_vehicles.add(v_id)
+                            traci.vehicle.setColor(v_id, (0, 100, 255))
+                            if v_id in active_trips:
+                                active_trips[v_id]["detoured"] = 1
                         else:
-                            # 费率不高时，默认不绕行
                             traci.vehicle.setColor(v_id, (255, 0, 0))
-                            
             else:
-                # 基线模式全变绿
                 for v_id, _ in vehs_in_cbd:
                     traci.vehicle.setColor(v_id, (0, 255, 0))
 
@@ -259,38 +314,68 @@ def run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv",
             # 数据落盘
             # ==========================================
             if step % 10 == 0:
-                csv_writer.writerow([step, cbd_count, round(current_fee_per_km, 2), round(avg_speed, 2), round(total_revenue, 2), total_detoured])
-                
+                total_det = len(detoured_vehicles)
+                csv_writer.writerow([
+                    step, cbd_count, round(current_fee_per_km, 2),
+                    round(cbd_speed, 2), round(global_avg_speed, 2),
+                    round(total_revenue, 2), total_det,
+                ])
                 if step % 1000 == 0:
                     if enable_tolling:
-                        print(f"进度: {step}/{SIM_STEPS}s | CBD拥堵: {cbd_count}辆 | 动态费率: ¥{current_fee_per_km:.2f}/km | 财政总计: ¥{total_revenue:.2f}")
+                        print(
+                            f"进度: {step}/{SIM_STEPS}s | CBD车: {cbd_count} | "
+                            f"费率: ¥{current_fee_per_km:.2f}/km | "
+                            f"CBD车速: {cbd_speed*3.6:.1f}km/h | "
+                            f"收入: ¥{total_revenue:.2f} | 绕行: {total_det}"
+                        )
                     else:
-                        print(f"进度: {step}/{SIM_STEPS}s | CBD拥堵: {cbd_count}辆 | [无收费基线测试中...]")
-            
+                        print(
+                            f"进度: {step}/{SIM_STEPS}s | CBD车: {cbd_count} | "
+                            f"CBD车速: {cbd_speed*3.6:.1f}km/h | [基线]"
+                        )
+
             step += 1
 
     except Exception as e:
         print(f"\n[错误] 仿真异常: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
-        # ==========================================
-        # 终极资源释放：无论是否收费，无论是否报错，强制清场
-        # ==========================================
-        if 'csv_file' in locals() and not csv_file.closed:
+        # 仿真结束后, 记录仍在 CBD 内的车辆 (末班车)
+        for v_id, trip in list(active_trips.items()):
+            travel_time = step - trip["enter_step"]
+            rd = max(0, traci.vehicle.getDistance(v_id) - trip["initial_distance"]) if v_id in traci.vehicle.getIDList() else 2000
+            cursor.execute(
+                "INSERT INTO Trips (veh_id, enter_step, exit_step, enter_edge, "
+                "exit_edge, travel_time, route_distance, toll_paid, detoured, avg_speed) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (v_id, trip["enter_step"], step, trip["enter_edge"],
+                 "SIM_END", travel_time, rd,
+                 trip["toll_paid"], trip["detoured"],
+                 rd / travel_time if travel_time > 0 else 0),
+            )
+
+        # 确保末班车数据提交
+        conn.commit()
+        trip_count = cursor.execute("SELECT COUNT(*) FROM Trips").fetchone()[0]
+        print(f"[数据库] Trips 表总记录: {trip_count} 趟")
+
+        if not csv_file.closed:
             csv_file.close()
-            
-        if 'conn' in locals():
-            conn.close()  # ✅ 移除 if enable_tolling 限制，双模式全部安全关库
-            
+        conn.close()
         traci.close()
 
-# ==========================================
-# 自动化执行两组对照实验
-# ==========================================
+    return total_revenue, len(detoured_vehicles)
+
+
 if __name__ == "__main__":
-    print(">>> 开始执行基线对照实验 (Baseline Experiment) <<<")
-    # 给基线组分配独立的 baseline.db
+    print(">>> 开始执行基线对照实验 (Baseline) <<<")
     run_simulation(enable_tolling=False, output_csv="baseline_report.csv", db_path="baseline.db")
-    
-    print("\n>>> 开始执行动态收费实验 (Tolling Experiment) <<<")
-    # 实验组继续使用主数据库
-    run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv", db_path="weihai_toll_system.db")
+
+    print("\n>>> 开始执行动态收费实验 (Tolling) <<<")
+    rev, det = run_simulation(
+        enable_tolling=True,
+        output_csv="weihai_analysis_report.csv",
+        db_path="weihai_toll_system.db",
+    )
+    print(f"\n仿真完成。总收入: ¥{rev:.2f}, 绕行车辆: {det}")
