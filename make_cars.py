@@ -17,13 +17,13 @@ script_path = os.path.join(sumo_home, 'tools', 'randomTrips.py')
 # fringe-factor=10 → 大部分车从路网边缘出发/到达, 路线必然穿越 CBD
 cmd_list = [
     sys.executable,
-    script_path,
+    script_path,                # 执行 randomTrips.py
     "-n", net_file,
     "-r", "routes.rou.xml",
     "-b", "0",
     "-e", "10800",               # 3小时早高峰
     "-p", "2.7",                 # 每2.7秒发一辆 → 10800/2.7 ≈ 4000辆, 符合题目规模
-    "--vclass", "passenger",
+    "--vclass", "passenger",    # 车辆类型：私家车
     "--fringe-factor", "10",     # 边缘发车权重10倍 → 制造CBD穿越车流
 ]
 

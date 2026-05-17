@@ -26,12 +26,12 @@ def run_traffic_audit(db_path="toll_system.db"):
         print("\n第一部分：宏观路网效能")
         macro_sql = """
             SELECT 
-                COUNT(*) as Total_Trips,
-                ROUND(AVG(travel_time), 2) as Avg_Travel_Time_sec,
-                ROUND(AVG(route_distance), 2) as Avg_Distance_m,
+                COUNT(*) as Total_Trips,      --总共有多少趟行程
+                ROUND(AVG(travel_time), 2) as Avg_Travel_Time_sec,--平均每趟耗时
+                ROUND(AVG(route_distance), 2) as Avg_Distance_m,  --平均每趟行驶
                 -- 仅计算合理速度下的平均值，过滤掉时速超 120km/h (33.3m/s) 的异常幽灵数据
                 ROUND(AVG(CASE WHEN avg_speed < 33.3 THEN avg_speed ELSE NULL END) * 3.6, 2) as Avg_Speed_kmh,
-                ROUND(SUM(toll_paid), 2) as Total_Revenue
+                ROUND(SUM(toll_paid), 2) as Total_Revenue   --总收入
             FROM Trips
         """
         macro_df = pd.read_sql_query(macro_sql, conn)
@@ -48,19 +48,19 @@ def run_traffic_audit(db_path="toll_system.db"):
         print("\n第二部分：价格杠杆与绕行博弈评估")
         detour_sql = """
             SELECT 
-                detoured,
-                COUNT(*) as count,
-                ROUND(AVG(travel_time), 2) as avg_time,
-                ROUND(AVG(route_distance), 2) as avg_dist,
-                ROUND(AVG(toll_paid), 2) as avg_toll
+                detoured,    --0或1
+                COUNT(*) as count,  --每组有多少趟
+                ROUND(AVG(travel_time), 2) as avg_time,   --平均耗时
+                ROUND(AVG(route_distance), 2) as avg_dist,  --平均距离
+                ROUND(AVG(toll_paid), 2) as avg_toll    --平均缴费
             FROM Trips
-            GROUP BY detoured
+            GROUP BY detoured     --按detoured分组
         """
         detour_df = pd.read_sql_query(detour_sql, conn)
         
         # 数据重组以方便展示
-        stay_data = detour_df[detour_df['detoured'] == 0]
-        flee_data = detour_df[detour_df['detoured'] == 1]
+        stay_data = detour_df[detour_df['detoured'] == 0]   --死磕组
+        flee_data = detour_df[detour_df['detoured'] == 1]   --绕行组
         
         stay_cnt = stay_data['count'].values[0] if not stay_data.empty else 0
         flee_cnt = flee_data['count'].values[0] if not flee_data.empty else 0
@@ -81,8 +81,8 @@ def run_traffic_audit(db_path="toll_system.db"):
         # 微观极端异常追踪 (Micro-Level Anomaly Tracking)
         # ---------------------------------------------------------
         print("\n第三部分：极端异常行程曝光台")
-        
-        # 选出被坑得最惨的“大冤种”（交钱最多）
+    
+        # 选出交钱最多
         max_toll_sql = """
             SELECT veh_id, travel_time, route_distance, ROUND(toll_paid, 2) as toll, exit_step
             FROM Trips 
