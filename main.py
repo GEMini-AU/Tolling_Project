@@ -94,16 +94,15 @@ def detour_decision(current_fee_per_km):
     driver_vot = random.uniform(VOT_MIN, VOT_MAX)
     detour_extra_seconds = random.uniform(DETOUR_TIME_MIN, DETOUR_TIME_MAX)
 
-    if expected_savings > (detour_extra_seconds * driver_vot):
-        return True
-    elif current_fee_per_km >= TOLL_THRESHOLD_HIGH:
-        return random.random() < 0.4
-    else:
-        return random.random() < 0.05
+    # 纯经济理性人模型: 节省的费用 > 额外的时间价值 → 绕行
+    # driver_vot 和 detour_extra_seconds 已随机化, 足以模拟驾驶员异质性
+    # 无需再叠加随机概率 (否则与 VOT 模型逻辑矛盾)
+    return expected_savings > (detour_extra_seconds * driver_vot)
 
 
-def run_simulation(enable_tolling=True, output_csv="weihai_analysis_report.csv",
-                   db_path="weihai_toll_system.db"):
+
+def run_simulation(enable_tolling=True, output_csv="toll_analysis_report.csv",
+                   db_path="toll_system.db"):
     cmd = ["sumo", "-n", NET_FILE, "-r", ROUTE_FILE, "-a", PARK_FILE]
     traci.start(cmd)
 
@@ -401,7 +400,7 @@ if __name__ == "__main__":
     print("\n>>> 开始执行动态收费实验 (Tolling) <<<")
     rev, det, true_div = run_simulation(
         enable_tolling=True,
-        output_csv="weihai_analysis_report.csv",
-        db_path="weihai_toll_system.db",
+        output_csv="toll_analysis_report.csv",
+        db_path="toll_system.db",
     )
     print(f"\n仿真完成。总收入: ¥{rev:.2f} | 被reroute车辆: {det} | 真正绕开CBD: {true_div}")

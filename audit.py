@@ -1,12 +1,12 @@
-import sqlite3
+﻿import sqlite3
 import pandas as pd
 
-def run_traffic_audit(db_path="weihai_toll_system.db"):
+def run_traffic_audit(db_path="toll_system.db"):
     """
     对仿真生成的 Trips 行程数据进行多维度的专业交通审计
     """
     print("="*60)
-    print("威海 CBD 动态收费系统深度行程审计报告 ")
+    print("CBD 动态收费系统深度行程审计报告 ")
     print("="*60)
 
     try:
@@ -40,7 +40,7 @@ def run_traffic_audit(db_path="weihai_toll_system.db"):
         print(f"车辆平均耗时: {macro_df['Avg_Travel_Time_sec'][0]} 秒/趟")
         print(f"车辆平均行驶: {macro_df['Avg_Distance_m'][0]} 米/趟")
         print(f"CBD 内平均车速: {macro_df['Avg_Speed_kmh'][0]} km/h")
-        print(f"财政总计收入: ¥ {macro_df['Total_Revenue'][0]}")
+        print(f"财政总计收入: CNY  {macro_df['Total_Revenue'][0]}")
 
         # ---------------------------------------------------------
         # 2. 绕行博弈深度评估 (Diversion Analysis)
@@ -67,12 +67,12 @@ def run_traffic_audit(db_path="weihai_toll_system.db"):
         total = stay_cnt + flee_cnt
         flee_rate = (flee_cnt / total * 100) if total > 0 else 0
 
-        print(f"价格驱动分流率: {flee_rate:.2f}% (共 {flee_cnt} 辆车因高昂费率选择绕行)")
+        print(f"价格驱动分流率: {flee_rate:.2f}% (共 {flee_cnt} 辆车被reroute, 部分后仍进入CBD)")
         
         if not stay_data.empty and not flee_data.empty:
             print("\n  [行为对比矩阵]")
-            print(f"  - 死磕路线 (硬交钱): 平均耗时 {stay_data['avg_time'].values[0]}s | 平均过路费 ¥{stay_data['avg_toll'].values[0]}")
-            print(f"  - 绕行路线 (省点钱): 平均耗时 {flee_data['avg_time'].values[0]}s | 平均过路费 ¥{flee_data['avg_toll'].values[0]}")
+            print(f"  - 死磕路线 (硬交钱): 平均耗时 {stay_data['avg_time'].values[0]}s | 平均过路费 CNY {stay_data['avg_toll'].values[0]}")
+            print(f"  - 绕行路线 (省点钱): 平均耗时 {flee_data['avg_time'].values[0]}s | 平均过路费 CNY {flee_data['avg_toll'].values[0]}")
             
             time_diff = flee_data['avg_time'].values[0] - stay_data['avg_time'].values[0]
             print(f"  * 结论: 绕行车辆平均多花了 {time_diff:.2f} 秒的时间成本，来躲避极端的拥堵费。")

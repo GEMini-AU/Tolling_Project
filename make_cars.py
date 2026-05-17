@@ -13,7 +13,7 @@ if not sumo_home:
 script_path = os.path.join(sumo_home, 'tools', 'randomTrips.py')
 
 # 核心发车参数
-# period=2.0 → 约 5400 辆车, 在 2km×2km CBD 中制造可观测的拥堵
+# period=2.7 → 约 4000 辆车
 # fringe-factor=10 → 大部分车从路网边缘出发/到达, 路线必然穿越 CBD
 cmd_list = [
     sys.executable,
@@ -32,7 +32,7 @@ print(f"路网: {net_file} | 预计发车 ~{approx_count} 辆 (10800s / 2.7s)")
 
 try:
     result = subprocess.run(cmd_list, capture_output=True, text=True, check=True)
-    print("\n 威海 CBD 3小时早高峰车流生成完毕")
+    print("\n CBD 3小时早高峰车流生成完毕")
     if result.stdout:
         # randomTrips.py 会输出统计信息
         for line in result.stdout.strip().split('\n'):

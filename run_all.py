@@ -8,7 +8,7 @@ import subprocess
 
 PYTHON = sys.executable
 STEPS = [
-    ("清理旧数据", [PYTHON, "-c", "import os; [os.remove(f) for f in ['baseline.db','weihai_toll_system.db','baseline_report.csv','weihai_analysis_report.csv'] if os.path.exists(f)]; print('已清理')"]),
+    ("清理旧数据", [PYTHON, "-c", "import os; [os.remove(f) for f in ['baseline.db','toll_system.db','baseline_report.csv','toll_analysis_report.csv'] if os.path.exists(f)]; print('已清理')"]),
     ("运行仿真 (约5-10分钟)", [PYTHON, "main.py"]),
     ("行程审计", [PYTHON, "audit.py"]),
     ("KPI 分析", [PYTHON, "calculate_kpis.py"]),
@@ -24,5 +24,5 @@ for name, cmd in STEPS:
         print(f"[警告] {name} 返回码: {result.returncode}")
 
 print(f"\n{'='*50}")
-print("  全部完成! 查看 weihai_toll_evaluation_charts.png")
+print("  全部完成! 查看 toll_evaluation_charts.png")
 print(f"{'='*50}")

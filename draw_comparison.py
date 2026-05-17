@@ -9,7 +9,7 @@ def draw_comprehensive_charts():
     try:
         print("读取仿真报告...")
         df_base = pd.read_csv("baseline_report.csv")
-        df_toll = pd.read_csv("weihai_analysis_report.csv")
+        df_toll = pd.read_csv("toll_analysis_report.csv")
 
         fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 14), sharex=True)
 
@@ -79,7 +79,7 @@ def draw_comprehensive_charts():
         ax3.legend(lines1 + lines2, labels1 + labels2, loc='upper left')
 
         fig.tight_layout()
-        output_file = "weihai_toll_evaluation_charts.png"
+        output_file = "toll_evaluation_charts.png"
         plt.savefig(output_file, dpi=300)
         print(f"图表已保存: {output_file}")
 
