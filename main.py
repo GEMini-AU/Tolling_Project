@@ -5,7 +5,7 @@ import sqlite3
 from config import (
     SIM_STEPS, INITIAL_BALANCE, NET_FILE, ROUTE_FILE, PARK_FILE,
     CBD_X_MIN, CBD_X_MAX, CBD_Y_MIN, CBD_Y_MAX,
-    CHARGE_INTERVAL_METERS, TOLL_THRESHOLD_HIGH,
+    CHARGE_INTERVAL_METERS,
     VOT_MIN, VOT_MAX, DETOUR_TIME_MIN, DETOUR_TIME_MAX,
     EXPECTED_CBD_DISTANCE_KM, TOLL_TO_TIME_FACTOR, get_toll_fee_per_km,
 )
@@ -106,7 +106,7 @@ def detour_decision(current_fee_per_km):
 
 def run_simulation(enable_tolling=True, output_csv="toll_analysis_report.csv",
                    db_path="toll_system.db"):
-    cmd = ["sumo", "-n", NET_FILE, "-r", ROUTE_FILE, "-a", PARK_FILE]
+    cmd = ["sumo-gui", "-n", NET_FILE, "-r", ROUTE_FILE, "-a", PARK_FILE, "--start"]
     traci.start(cmd)
 
     conn = sqlite3.connect(db_path)

@@ -59,8 +59,8 @@ def run_traffic_audit(db_path="toll_system.db"):
         detour_df = pd.read_sql_query(detour_sql, conn)
         
         # 数据重组以方便展示
-        stay_data = detour_df[detour_df['detoured'] == 0]   --死磕组
-        flee_data = detour_df[detour_df['detoured'] == 1]   --绕行组
+        stay_data = detour_df[detour_df['detoured'] == 0]   # 死磕组
+        flee_data = detour_df[detour_df['detoured'] == 1]   # 绕行组
         
         stay_cnt = stay_data['count'].values[0] if not stay_data.empty else 0
         flee_cnt = flee_data['count'].values[0] if not flee_data.empty else 0
