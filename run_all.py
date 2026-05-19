@@ -9,7 +9,7 @@ import subprocess
 PYTHON = sys.executable
 STEPS = [
     ("清理旧数据", [PYTHON, "-c", "import os; [os.remove(f) for f in ['baseline.db','toll_system.db','baseline_report.csv','toll_analysis_report.csv'] if os.path.exists(f)]; print('已清理')"]),
-    ("运行仿真 (约5-10分钟)", [PYTHON, "main.py"]),
+    ("运行仿真", [PYTHON, "main.py"]),
     ("行程审计", [PYTHON, "audit.py"]),
     ("KPI 分析", [PYTHON, "calculate_kpis.py"]),
     ("生成图表", [PYTHON, "draw_comparison.py"]),

@@ -217,11 +217,10 @@ def run_simulation(enable_tolling=True, output_csv="toll_analysis_report.csv",
                             old_route = traci.vehicle.getRoute(v_id)
                             traci.vehicle.rerouteTraveltime(v_id)
                             new_route = traci.vehicle.getRoute(v_id)
-                            if new_route != old_route:            # 路线确实变了才算真绕行
+                            if new_route != old_route:            # 路线变了才算真绕行
                                 detoured_vehicles.add(v_id)
                                 traci.vehicle.setColor(v_id, (0, 100, 255))
-                            else:
-                                traci.vehicle.setColor(v_id, (255, 80, 80))  # 想绕但没路可绕
+                            # 路线没变 → 保持红色，不做额外标记
                         else:
                             traci.vehicle.setColor(v_id, (255, 200, 0))     #车身为橙色
 
@@ -229,7 +228,7 @@ def run_simulation(enable_tolling=True, output_csv="toll_analysis_report.csv",
             # 行程审计
             # ==========================================
 
-            # 建档：车只要刚进 CBD，立刻给它建个档案
+            # 建档：车只要刚进 CBD，立刻建档案 + 变色（不等 500m 收费才变）
             for v_id, speed in vehs_in_cbd:
                 if v_id not in active_trips:
                     active_trips[v_id] = {
@@ -239,6 +238,10 @@ def run_simulation(enable_tolling=True, output_csv="toll_analysis_report.csv",
                         "toll_paid": 0.0,
                         "detoured": 0,
                     }
+                    if enable_tolling:
+                        traci.vehicle.setColor(v_id, (255, 0, 0))    # 红色=在收费区
+                    else:
+                        traci.vehicle.setColor(v_id, (0, 255, 0))    # 绿色=基线
             #销档：找那些刚刚还在 CBD，现在却不见了的车
             exited_vehs = [v for v in active_trips if v not in curr_vehs_in_zone]
             for v_id in exited_vehs:
@@ -257,7 +260,7 @@ def run_simulation(enable_tolling=True, output_csv="toll_analysis_report.csv",
                     route_distance = max(0, cbd_cumulative_dist.get(v_id, 0.0))
                 avg_speed_trip = (route_distance / travel_time) if travel_time > 0 else 0
                 
-                # cbd_distance = CBD 内精确累计距离，用于计费与分流分析
+                # cbd_distance = CBD 内精确累计距离
                 cbd_dist = cbd_cumulative_dist.get(v_id, route_distance)
                 cursor.execute(
                     "INSERT INTO Trips (veh_id, enter_step, exit_step, enter_edge, "
@@ -322,8 +325,7 @@ def run_simulation(enable_tolling=True, output_csv="toll_analysis_report.csv",
                                 traci.vehicle.setColor(v_id, (0, 100, 255))
                                 if v_id in active_trips:
                                     active_trips[v_id]["detoured"] = 1
-                            else:
-                                traci.vehicle.setColor(v_id, (255, 80, 80))
+                            # 路线没变 → 保持红色
                         else:
                             traci.vehicle.setColor(v_id, (255, 0, 0))
             else:
